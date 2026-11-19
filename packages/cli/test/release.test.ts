@@ -238,6 +238,85 @@ describe("installed hotpath", () => {
     }
   }, 60_000);
 
+  // Claude Code (or any MCP client) starts `hotpath demo-tools` on its own, with
+  // none of the settings `hotpath demo` passes: it must still find its data and
+  // write what it "sends" into the project folder.
+  it("demo-tools works when an MCP client starts it directly", async () => {
+    const calls = [
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: { name: "release-test", version: "0" },
+        },
+      },
+      { jsonrpc: "2.0", method: "notifications/initialized" },
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "get_emails", arguments: { date: "2026-10-01" } },
+      },
+      {
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: {
+          name: "send_message",
+          arguments: { to: "me", text: "release test" },
+        },
+      },
+    ];
+    const replies = await new Promise<
+      Array<{
+        id?: number;
+        result?: { isError?: boolean; content?: Array<{ text?: string }> };
+      }>
+    >((resolve, reject) => {
+      const child = crossSpawn(hotpathBin, ["demo-tools"], {
+        cwd: project,
+        env: cleanEnv(),
+      });
+      let out = "";
+      let err = "";
+      const got: Array<{ id?: number }> = [];
+      const timer = setTimeout(() => {
+        child.kill();
+        reject(new Error(`no answer in time; stderr: ${err}`));
+      }, 30_000);
+      child.stderr?.on("data", (d) => (err += d));
+      child.stdout?.on("data", (d) => {
+        out += d;
+        let nl: number;
+        while ((nl = out.indexOf("\n")) >= 0) {
+          const line = out.slice(0, nl).trim();
+          out = out.slice(nl + 1);
+          if (!line) continue;
+          got.push(JSON.parse(line) as { id?: number });
+          if (got.some((g) => g.id === 3)) {
+            clearTimeout(timer);
+            child.kill();
+            resolve(got as never);
+          }
+        }
+      });
+      child.on("error", reject);
+      for (const c of calls) child.stdin?.write(JSON.stringify(c) + "\n");
+    });
+    const emails = replies.find((r) => r.id === 2)?.result;
+    expect(emails?.isError, JSON.stringify(emails)).not.toBe(true);
+    expect(emails?.content?.[0]?.text).toMatch(/"emails":\[\{/);
+    const sent = replies.find((r) => r.id === 3)?.result;
+    expect(sent?.isError, JSON.stringify(sent)).not.toBe(true);
+    const messages = JSON.parse(
+      await readFile(path.join(project, "out", "messages.json"), "utf8"),
+    ) as Array<{ text: string }>;
+    expect(messages.map((m) => m.text)).toContain("release test");
+  }, 60_000);
+
   it("hotpath demo says what to do first, and refuses too few runs", async () => {
     const few = await hotpath(["demo", "--runs", "2"]);
     expect(few.code).toBe(1);

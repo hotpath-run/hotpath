@@ -44,6 +44,31 @@ The demo needs a model that can call tools. `qwen3:1.7b` is enough for it; if a 
 
 To keep the command around: `npm i -g @hotpathrun/cli`, then `hotpath demo` and `hotpath --help`.
 
+## Try it in Claude Code
+
+The same demo, with Claude Code as the agent. The tools are fake (emails, calendar and weather from bundled files), so nothing real is read or sent. In the `hotpath-try` folder from the quickstart:
+
+```bash
+claude mcp add hotpath-demo -- npx -y @hotpathrun/cli record --task morning-brief -- npx -y @hotpathrun/cli demo-tools
+claude
+```
+
+On Windows (not WSL), start the server through `cmd /c`: `claude mcp add hotpath-demo -- cmd /c npx -y @hotpathrun/cli record --task morning-brief -- npx -y @hotpathrun/cli demo-tools`.
+
+Then ask the same thing three times, each in a new conversation (`/clear`), with a different date:
+
+> Use the hotpath-demo tools: get my emails, calendar and the weather in Paris for 2026-10-01, then send me a short morning brief with send_message to "me".
+
+Use 2026-10-02 and 2026-10-03 for the next two. Each run is recorded into `traces/morning-brief/`. Then:
+
+```bash
+npx @hotpathrun/cli learn                          # lists the path Claude repeated, with its name
+npx @hotpathrun/cli learn --promote <path>         # shadow check, then it goes live
+npx @hotpathrun/cli run <path> --input date=2026-10-05
+```
+
+The last command does the task with no agent: the tool calls are plain code, and your model from `init` writes only the text of the brief. The "sent" message is in `out/messages.json`. To remove the demo server: `claude mcp remove hotpath-demo`.
+
 ## Connect your own agent
 
 Pick the one that matches how your agent calls tools.

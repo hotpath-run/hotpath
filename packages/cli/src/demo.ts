@@ -57,6 +57,10 @@ export function addDemoCommand(program: Command): void {
     .command("demo-tools", { hidden: true })
     .description("(internal) the demo's fake MCP tool server")
     .action(async () => {
+      // An MCP client such as Claude Code starts this with none of the settings
+      // `hotpath demo` passes; the demo modules read them when they load.
+      process.env.DEMO_FIXTURES_DIR ??= demoFixturesDir();
+      process.env.DEMO_OUT_DIR ??= path.join(projectRoot(), "out");
       await import("../../../examples/demo-tools/src/index.js");
     });
 

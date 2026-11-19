@@ -1,6 +1,6 @@
 {
   "name": "@hotpathrun/sdk",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Record and replay agents whose tools are functions in their own code (no MCP server)",
   "license": "Apache-2.0",
   "repository": {
