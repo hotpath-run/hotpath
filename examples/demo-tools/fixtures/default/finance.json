@@ -1,0 +1,82 @@
+{
+  "date": "2026-10-01",
+  "rates": {
+    "USD": 0.9,
+    "GBP": 1.2
+  },
+  "pages": [
+    [
+      {
+        "ref": "BK-1001",
+        "description": "SEPA Verdier et Fils",
+        "amount": 1200,
+        "currency": "EUR"
+      },
+      {
+        "ref": "BK-1002",
+        "description": "Stripe payout",
+        "amount": 840.5,
+        "currency": "USD"
+      },
+      {
+        "ref": "BK-1003",
+        "description": "Rent October",
+        "amount": -2400,
+        "currency": "EUR"
+      },
+      {
+        "ref": "BK-1004",
+        "description": "AWS invoice",
+        "amount": -310,
+        "currency": "USD"
+      }
+    ],
+    [
+      {
+        "ref": "BK-1005",
+        "description": "Salary run",
+        "amount": -5200,
+        "currency": "EUR"
+      },
+      {
+        "ref": "BK-1006",
+        "description": "Customer Kowalczyk Studio",
+        "amount": 450,
+        "currency": "GBP"
+      },
+      {
+        "ref": "BK-1007",
+        "description": "Bank fee",
+        "amount": -18.5,
+        "currency": "EUR"
+      }
+    ]
+  ],
+  "ledger": [
+    {
+      "ref": "BK-1001",
+      "vendor": "Verdier et Fils",
+      "amount_eur": 1200
+    },
+    {
+      "ref": "BK-1002",
+      "vendor": "Stripe",
+      "amount_eur": 756.45
+    },
+    {
+      "ref": "BK-1003",
+      "vendor": "Landlord",
+      "amount_eur": -2400
+    },
+    {
+      "ref": "BK-1005",
+      "vendor": "Payroll",
+      "amount_eur": -5200
+    },
+    {
+      "ref": "BK-1006",
+      "vendor": "Kowalczyk Studio",
+      "amount_eur": 540
+    }
+  ]
+}

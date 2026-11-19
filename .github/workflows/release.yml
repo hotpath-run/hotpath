@@ -1,0 +1,58 @@
+name: Release
+
+# Publishes every public package to npm, with provenance, when a version tag is
+# pushed:  git tag v0.2.0 && git push origin v0.2.0
+# Needs one repository secret, NPM_TOKEN: an npm automation token that can publish
+# to the @hotpathrun scope. The provenance statement is signed by GitHub (id-token).
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # provenance
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      # pnpm version comes from "packageManager" in package.json
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - run: pnpm install --frozen-lockfile
+
+      # No API keys here: tests mock the model.
+      - run: pnpm -r build
+      - run: pnpm -r test
+      - run: pnpm lint
+
+      # The tag must name the version being published (v0.2.0 -> 0.2.0).
+      - name: Check the tag matches the version
+        run: |
+          expected="${GITHUB_REF_NAME#v}"
+          actual="$(node -p "require('./packages/cli/package.json').version")"
+          if [ "$expected" != "$actual" ]; then
+            echo "tag $GITHUB_REF_NAME does not match @hotpathrun/cli version $actual" >&2
+            exit 1
+          fi
+
+      # Each package builds itself in its prepack step (dist/ for the libraries,
+      # the bundled CLI with the viewer and the demo data for @hotpathrun/cli).
+      # Private packages and versions already on npm are skipped.
+      - name: Publish
+        run: pnpm -r publish --access public --provenance --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"

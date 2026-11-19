@@ -1,0 +1,57 @@
+{
+  "2026-10-01": {
+    "orders": [
+      {
+        "id": "A-1001",
+        "customer": "Brasserie Lutèce",
+        "total": 412.5,
+        "status": "paid"
+      },
+      {
+        "id": "A-1002",
+        "customer": "Atelier Vernet",
+        "total": 89,
+        "status": "pending"
+      },
+      {
+        "id": "A-1003",
+        "customer": "Hôtel Mirabeau",
+        "total": 1730,
+        "status": "paid"
+      }
+    ],
+    "alerts": [
+      { "sku": "ESP-250", "name": "Espresso beans 250 g", "left": 4 },
+      { "sku": "FLT-100", "name": "Paper filters x100", "left": 0 }
+    ]
+  },
+  "2026-10-02": {
+    "orders": [
+      {
+        "id": "A-2001",
+        "customer": "Maison Colibri",
+        "total": 1250,
+        "status": "paid"
+      },
+      {
+        "id": "A-2002",
+        "customer": "Studio Petrichor",
+        "total": 64.9,
+        "status": "refunded"
+      },
+      {
+        "id": "A-2003",
+        "customer": "Librairie Solstice",
+        "total": 230,
+        "status": "pending"
+      },
+      {
+        "id": "A-2004",
+        "customer": "Café Ventoux",
+        "total": 318.2,
+        "status": "paid"
+      }
+    ],
+    "alerts": [{ "sku": "MLK-OAT", "name": "Oat milk 1 L", "left": 2 }]
+  }
+}

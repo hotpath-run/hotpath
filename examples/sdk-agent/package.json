@@ -1,0 +1,23 @@
+{
+  "name": "sdk-agent",
+  "version": "0.1.0",
+  "description": "Example agent whose tools are plain functions (no MCP), recorded and replayed with @hotpathrun/sdk",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit",
+    "start": "tsx src/index.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@hotpathrun/compiler": "workspace:*",
+    "@hotpathrun/sdk": "workspace:*",
+    "@hotpathrun/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "vitest": "^2.1.8"
+  }
+}

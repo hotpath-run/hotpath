@@ -1,0 +1,72 @@
+{
+  "date": "2026-10-02",
+  "rates": {
+    "USD": 0.9,
+    "GBP": 1.2
+  },
+  "pages": [
+    [
+      {
+        "ref": "BK-2001",
+        "amount": 2000,
+        "currency": "EUR"
+      },
+      {
+        "ref": "BK-2002",
+        "amount": -120,
+        "currency": "USD"
+      },
+      {
+        "ref": "BK-2003",
+        "amount": -85.5,
+        "currency": "EUR"
+      }
+    ],
+    [
+      {
+        "ref": "BK-2004",
+        "amount": 760,
+        "currency": "GBP"
+      },
+      {
+        "ref": "BK-2005",
+        "amount": -640,
+        "currency": "EUR"
+      },
+      {
+        "ref": "BK-2006",
+        "amount": -250,
+        "currency": "USD"
+      }
+    ],
+    [
+      {
+        "ref": "BK-2007",
+        "amount": -95,
+        "currency": "EUR"
+      }
+    ]
+  ],
+  "ledger": [
+    {
+      "ref": "BK-2001",
+      "vendor": "Halvorsen Marine",
+      "amount_eur": 2000
+    },
+    {
+      "ref": "BK-2003",
+      "vendor": "DHL",
+      "amount_eur": -85.5
+    },
+    {
+      "ref": "BK-2004",
+      "vendor": "Petit Atelier Bleu",
+      "amount_eur": 912
+    },
+    {
+      "ref": "BK-2005",
+      "vendor": "Insurer",
+      "amount_eur": -640
+    }
+  ]
+}

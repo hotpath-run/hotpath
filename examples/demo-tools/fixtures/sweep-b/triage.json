@@ -1,0 +1,47 @@
+{
+  "email": {
+    "id": "M-000",
+    "from": "nobody@example.org",
+    "subject": "(no email today)",
+    "priority": "normal",
+    "body": ""
+  },
+  "mailbox": [
+    {
+      "id": "f1",
+      "from": "hr@acme.example",
+      "subject": "Holiday calendar",
+      "category": "normal"
+    },
+    {
+      "id": "f2",
+      "from": "lotto@win.example",
+      "subject": "You are our 1,000,000th visitor",
+      "category": "spam"
+    },
+    {
+      "id": "f3",
+      "from": "ops@acme.example",
+      "subject": "Disk almost full",
+      "category": "urgent"
+    },
+    {
+      "id": "f4",
+      "from": "pills@shop.example",
+      "subject": "Miracle pills",
+      "category": "spam"
+    },
+    {
+      "id": "f5",
+      "from": "news@city.io",
+      "subject": "Metro line 4 closed",
+      "category": "normal"
+    },
+    {
+      "id": "f6",
+      "from": "crypto@gains.example",
+      "subject": "Double your coins",
+      "category": "spam"
+    }
+  ]
+}

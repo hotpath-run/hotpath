@@ -1,0 +1,31 @@
+{
+  "2026-10-01": [
+    { "id": "A-1001", "customer": "Brasserie Lutèce", "total": 412.5 },
+    { "id": "A-1002", "customer": "Atelier Vernet", "total": 89 },
+    { "id": "A-1003", "customer": "Hôtel Mirabeau", "total": 1730 }
+  ],
+  "2026-10-02": [
+    { "id": "A-2001", "customer": "Maison Colibri", "total": 1250 },
+    { "id": "A-2002", "customer": "Studio Petrichor", "total": 64.9 },
+    { "id": "A-2003", "customer": "Librairie Solstice", "total": 230 },
+    { "id": "A-2004", "customer": "Café Arpège", "total": 515 }
+  ],
+  "2026-10-03": [
+    { "id": "A-3001", "customer": "Boulangerie Ondine", "total": 77.4 },
+    { "id": "A-3002", "customer": "Galerie Nocturne", "total": 980 }
+  ],
+  "2026-10-04": [
+    { "id": "A-4001", "customer": "Épicerie Cobalt", "total": 342 },
+    { "id": "A-4002", "customer": "Bistro Zénith", "total": 1105.5 },
+    { "id": "A-4003", "customer": "Théâtre Lumen", "total": 268 }
+  ],
+  "2026-10-05": [
+    { "id": "A-5001", "customer": "Fromagerie Alcôve", "total": 455 },
+    { "id": "A-5002", "customer": "Atelier Vernet", "total": 132 }
+  ],
+  "2026-10-06": [
+    { "id": "A-6001", "customer": "Maison Colibri", "total": 610 },
+    { "id": "A-6002", "customer": "Studio Halcyon", "total": 88.8 },
+    { "id": "A-6003", "customer": "Cave Saint-Roch", "total": 1490 }
+  ]
+}

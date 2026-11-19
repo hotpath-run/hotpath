@@ -1,0 +1,58 @@
+{
+  "name": "@hotpathrun/scheduler",
+  "version": "0.2.0",
+  "description": "Schedules, daemon, run history and notifications for compiled workflows",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hotpath-run/hotpath.git",
+    "directory": "packages/scheduler"
+  },
+  "homepage": "https://hotpath.run",
+  "bugs": {
+    "url": "https://github.com/hotpath-run/hotpath/issues"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "prepack": "tsc -p tsconfig.build.json && node ../../scripts/copy-license.mjs"
+  },
+  "dependencies": {
+    "croner": "^10.0.1",
+    "cross-spawn": "^7.0.6",
+    "@hotpathrun/compiler": "workspace:*",
+    "@hotpathrun/runtime": "workspace:*",
+    "@hotpathrun/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/cross-spawn": "^6.0.6",
+    "@types/node": "^22.10.0",
+    "vitest": "^2.1.8"
+  }
+}

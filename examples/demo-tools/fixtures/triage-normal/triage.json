@@ -1,0 +1,41 @@
+{
+  "email": {
+    "id": "M-102",
+    "from": "maria@acme.example",
+    "subject": "Q4 planning notes attached",
+    "priority": "normal",
+    "body": "Notes from Tuesday's planning session, for your records."
+  },
+  "mailbox": [
+    {
+      "id": "e1",
+      "from": "promo@deals.example",
+      "subject": "Win a free cruise",
+      "category": "spam"
+    },
+    {
+      "id": "e2",
+      "from": "maria@acme.example",
+      "subject": "Q3 budget review",
+      "category": "normal"
+    },
+    {
+      "id": "e3",
+      "from": "watch@bargains.example",
+      "subject": "Cheap watches",
+      "category": "spam"
+    },
+    {
+      "id": "e4",
+      "from": "cto@acme.example",
+      "subject": "Server down",
+      "category": "urgent"
+    },
+    {
+      "id": "e5",
+      "from": "hr@acme.example",
+      "subject": "Lunch on Friday",
+      "category": "normal"
+    }
+  ]
+}

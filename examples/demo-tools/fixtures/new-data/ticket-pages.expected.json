@@ -1,0 +1,10 @@
+{
+  "date": "2026-10-02",
+  "mustMention": [
+    "Invoice PDF missing the VAT line",
+    "Search ignores accented letters",
+    "Calendar invite shows UTC times",
+    "Bulk delete times out after 30 items",
+    "Avatar upload rejects PNG files"
+  ]
+}

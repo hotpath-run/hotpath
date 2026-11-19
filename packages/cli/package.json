@@ -1,0 +1,62 @@
+{
+  "name": "@hotpathrun/cli",
+  "version": "0.2.0",
+  "description": "The hotpath command line: record, compile, show, run and view",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hotpath-run/hotpath.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://hotpath.run",
+  "bugs": {
+    "url": "https://github.com/hotpath-run/hotpath/issues"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "mcp",
+    "llm",
+    "workflow",
+    "jit",
+    "openclaw"
+  ],
+  "type": "module",
+  "bin": {
+    "hotpath": "dist/hotpath.mjs"
+  },
+  "files": [
+    "dist",
+    "viewer",
+    "demo",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "prepack": "node ../../scripts/build-cli.mjs"
+  },
+  "devDependencies": {
+    "commander": "^12.1.0",
+    "cross-spawn": "^7.0.6",
+    "@hotpathrun/compiler": "workspace:*",
+    "@hotpathrun/learn": "workspace:*",
+    "@hotpathrun/proxy": "workspace:*",
+    "@hotpathrun/recorder": "workspace:*",
+    "@hotpathrun/runtime": "workspace:*",
+    "@hotpathrun/scheduler": "workspace:*",
+    "@hotpathrun/shared": "workspace:*",
+    "@hotpathrun/viewer": "workspace:*",
+    "json5": "^2.2.3",
+    "@types/cross-spawn": "^6.0.6",
+    "demo-agent": "workspace:*",
+    "demo-tools": "workspace:*"
+  }
+}

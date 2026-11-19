@@ -1,0 +1,18 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+/traces/
+/workflows/
+/out/
+/.hotpath/
+bench/results.json
+bench/branching-results.json
+*.log
+*.tgz
+/hotpath-report-*/
+# built by the CLI package's prepack step (scripts/build-cli.mjs)
+/packages/cli/viewer/
+/packages/cli/demo/
+/packages/*/LICENSE

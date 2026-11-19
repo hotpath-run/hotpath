@@ -1,0 +1,247 @@
+{
+  "date": "2026-10-02",
+  "tickets": {
+    "pages": [
+      [
+        {
+          "id": "T-501",
+          "title": "Invoice PDF missing the VAT line",
+          "priority": "high"
+        },
+        {
+          "id": "T-502",
+          "title": "Search ignores accented letters",
+          "priority": "medium"
+        }
+      ],
+      [
+        {
+          "id": "T-503",
+          "title": "Calendar invite shows UTC times",
+          "priority": "low"
+        },
+        {
+          "id": "T-504",
+          "title": "Bulk delete times out after 30 items",
+          "priority": "high"
+        }
+      ],
+      [
+        {
+          "id": "T-505",
+          "title": "Avatar upload rejects PNG files",
+          "priority": "low"
+        }
+      ]
+    ]
+  },
+  "order": {
+    "id": "ORD-7802",
+    "customer_id": "C-377",
+    "total": 96
+  },
+  "customers": {
+    "C-204": {
+      "id": "C-204",
+      "name": "Fabienne Marchetti",
+      "email": "f.marchetti@lumen.example",
+      "tier": "gold"
+    },
+    "C-377": {
+      "id": "C-377",
+      "name": "Oskar Lindqvist",
+      "email": "oskar@nordwind.example",
+      "tier": "silver"
+    }
+  },
+  "shipping": {
+    "ORD-7731": {
+      "order_id": "ORD-7731",
+      "carrier": "Colissimo",
+      "eta": "2026-10-03"
+    },
+    "ORD-7802": {
+      "order_id": "ORD-7802",
+      "carrier": "DHL Express",
+      "eta": "2026-10-04"
+    }
+  },
+  "projects": [
+    {
+      "id": "P-11",
+      "name": "Checkout redesign"
+    },
+    {
+      "id": "P-12",
+      "name": "Fraud scoring"
+    },
+    {
+      "id": "P-13",
+      "name": "Help centre refresh"
+    },
+    {
+      "id": "P-14",
+      "name": "Warehouse robotics pilot"
+    },
+    {
+      "id": "P-15",
+      "name": "Carbon reporting"
+    },
+    {
+      "id": "P-16",
+      "name": "Loyalty programme"
+    },
+    {
+      "id": "P-17",
+      "name": "Supplier API"
+    }
+  ],
+  "project_details": {
+    "P-11": {
+      "status": "at risk",
+      "progress": 48,
+      "risks": [
+        {
+          "title": "Payment provider SDK is in beta"
+        }
+      ],
+      "spent": 36,
+      "budget": 40
+    },
+    "P-12": {
+      "status": "on track",
+      "progress": 81,
+      "risks": [
+        {
+          "title": "False positives on gift cards"
+        }
+      ],
+      "spent": 52,
+      "budget": 75
+    },
+    "P-13": {
+      "status": "on track",
+      "progress": 67,
+      "risks": [
+        {
+          "title": "Translations arrive late"
+        }
+      ],
+      "spent": 9,
+      "budget": 20
+    },
+    "P-14": {
+      "status": "blocked",
+      "progress": 5,
+      "risks": [
+        {
+          "title": "Safety certification pending"
+        }
+      ],
+      "spent": 18,
+      "budget": 90
+    },
+    "P-15": {
+      "status": "on track",
+      "progress": 29,
+      "risks": [
+        {
+          "title": "Supplier data is incomplete"
+        }
+      ],
+      "spent": 11,
+      "budget": 35
+    },
+    "P-16": {
+      "status": "at risk",
+      "progress": 44,
+      "risks": [
+        {
+          "title": "Points liability unclear to finance"
+        }
+      ],
+      "spent": 27,
+      "budget": 30
+    },
+    "P-17": {
+      "status": "on track",
+      "progress": 92,
+      "risks": [
+        {
+          "title": "Rate limits not agreed"
+        }
+      ],
+      "spent": 31,
+      "budget": 38
+    }
+  },
+  "sales": [
+    {
+      "region": "Alpine region",
+      "revenue": 7600,
+      "orders": 88
+    },
+    {
+      "region": "Nordics",
+      "revenue": 15250,
+      "orders": 190
+    },
+    {
+      "region": "Adriatic",
+      "revenue": 4300,
+      "orders": 57
+    },
+    {
+      "region": "Baltics",
+      "revenue": 2900,
+      "orders": 41
+    }
+  ],
+  "incident": {
+    "id": "INC-3412",
+    "title": "Search results stale for new listings",
+    "severity": "sev3",
+    "service": "search-indexer",
+    "summary": "New listings took up to 40 minutes to appear after an indexer restart."
+  },
+  "invoices": [
+    {
+      "id": "INV-9010",
+      "customer": "Halvorsen Marine",
+      "amount": 210
+    },
+    {
+      "id": "INV-9011",
+      "customer": "Petit Atelier Bleu",
+      "amount": 385
+    },
+    {
+      "id": "INV-9012",
+      "customer": "Zielona Kawa",
+      "amount": 95
+    },
+    {
+      "id": "INV-9013",
+      "customer": "Tamsin Okafor Ltd",
+      "amount": 160
+    }
+  ],
+  "meetings": {
+    "timezone": "Europe/Paris",
+    "utc_offset": "+02:00",
+    "meetings": [
+      {
+        "title": "Launch readiness check",
+        "start_utc": "2026-10-02T08:15:00Z"
+      },
+      {
+        "title": "Call with the Singapore team",
+        "start_utc": "2026-10-02T06:00:00Z"
+      },
+      {
+        "title": "Budget sign-off",
+        "start_utc": "2026-10-02T14:45:00Z"
+      }
+    ]
+  }
+}

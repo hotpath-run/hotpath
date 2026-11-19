@@ -1,0 +1,52 @@
+{
+  "data": [
+    {
+      "id": "lf-trace-1",
+      "name": "inbox-agent",
+      "timestamp": "2026-11-18T08:00:00.000Z",
+      "observations": [
+        {
+          "id": "o1",
+          "traceId": "lf-trace-1",
+          "type": "GENERATION",
+          "name": "chat",
+          "startTime": "2026-11-18T08:00:00.100Z",
+          "endTime": "2026-11-18T08:00:01.000Z",
+          "model": "gpt-4o-mini",
+          "usageDetails": { "input": 900, "output": 40, "total": 940 },
+          "costDetails": {
+            "input": 0.000135,
+            "output": 0.000024,
+            "total": 0.000159
+          },
+          "level": "DEFAULT"
+        },
+        {
+          "id": "o2",
+          "traceId": "lf-trace-1",
+          "type": "TOOL",
+          "name": "get_emails",
+          "parentObservationId": "o0",
+          "startTime": "2026-11-18T08:00:01.100Z",
+          "endTime": "2026-11-18T08:00:01.400Z",
+          "input": "{\"folder\":\"inbox\",\"unread\":true}",
+          "output": "{\"emails\":[{\"subject\":\"Hi\"}]}",
+          "level": "DEFAULT"
+        },
+        {
+          "id": "o3",
+          "traceId": "lf-trace-1",
+          "type": "TOOL",
+          "name": "send_message",
+          "startTime": "2026-11-18T08:00:02.000Z",
+          "endTime": "2026-11-18T08:00:02.300Z",
+          "input": { "to": "team", "body": "digest" },
+          "output": null,
+          "level": "ERROR",
+          "statusMessage": "rate limited"
+        }
+      ]
+    }
+  ],
+  "meta": { "page": 1, "limit": 50, "totalItems": 1, "totalPages": 1 }
+}

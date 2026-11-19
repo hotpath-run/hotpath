@@ -1,0 +1,9 @@
+# Line endings must not depend on the machine: prettier checks for LF, and a
+# Windows checkout with core.autocrlf would otherwise fail `pnpm lint`.
+* text=auto eol=lf
+
+*.gif binary
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff2 binary

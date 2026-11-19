@@ -1,0 +1,34 @@
+{
+  "name": "hotpath-bench",
+  "version": "0.1.0",
+  "description": "End-to-end benchmark for Hotpath (same-data, new-data and drift scenarios against a real LLM)",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hotpath-run/hotpath.git",
+    "directory": "bench"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "mcp",
+    "llm",
+    "workflow",
+    "jit",
+    "openclaw"
+  ],
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.8"
+  },
+  "dependencies": {
+    "@hotpathrun/compiler": "workspace:*",
+    "@hotpathrun/runtime": "workspace:*",
+    "@hotpathrun/shared": "workspace:*"
+  }
+}

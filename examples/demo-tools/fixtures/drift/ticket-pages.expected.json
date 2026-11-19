@@ -1,0 +1,9 @@
+{
+  "date": "2026-10-01",
+  "mustMention": [
+    "Checkout button unresponsive on Safari",
+    "Export to CSV drops the last row",
+    "Password reset email arrives twice",
+    "Dashboard chart shows wrong currency"
+  ]
+}

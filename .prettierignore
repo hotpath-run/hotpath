@@ -1,0 +1,10 @@
+node_modules
+dist
+traces
+workflows
+out
+pnpm-lock.yaml
+hotpath-report-*
+packages/cli/viewer
+packages/cli/demo
+docs/SPEC.md

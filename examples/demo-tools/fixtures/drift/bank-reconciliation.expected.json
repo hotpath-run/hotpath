@@ -1,0 +1,21 @@
+{
+  "date": "2026-10-01",
+  "mustMention": ["BK-1004", "BK-1007", "297.5"],
+  "exact": {
+    "total": {
+      "value": -297.5,
+      "tolerance": 0.01
+    },
+    "lines": [
+      {
+        "ref": "BK-1004",
+        "amount": -279
+      },
+      {
+        "ref": "BK-1007",
+        "amount": -18.5
+      }
+    ],
+    "matched": ["BK-1001", "BK-1002", "BK-1003", "BK-1005", "BK-1006"]
+  }
+}

@@ -1,0 +1,160 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          { "key": "service.name", "value": { "stringValue": "support-agent" } }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": { "name": "opentelemetry.instrumentation.openai_agents" },
+          "spans": [
+            {
+              "traceId": "5b8efff798038103d269b633813fc60c",
+              "spanId": "a1",
+              "name": "invoke_agent support",
+              "startTimeUnixNano": "1763510400000000000",
+              "endTimeUnixNano": "1763510406000000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": { "stringValue": "invoke_agent" }
+                }
+              ],
+              "status": { "code": 1 }
+            },
+            {
+              "traceId": "5b8efff798038103d269b633813fc60c",
+              "spanId": "a2",
+              "parentSpanId": "a1",
+              "name": "chat gpt-4.1",
+              "startTimeUnixNano": "1763510400100000000",
+              "endTimeUnixNano": "1763510401000000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": { "stringValue": "chat" }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": { "stringValue": "gpt-4.1" }
+                },
+                {
+                  "key": "gen_ai.response.model",
+                  "value": { "stringValue": "gpt-4.1-2025-04-14" }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": { "intValue": "1200" }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": { "intValue": 85 }
+                }
+              ]
+            },
+            {
+              "traceId": "5b8efff798038103d269b633813fc60c",
+              "spanId": "a3",
+              "parentSpanId": "a1",
+              "name": "execute_tool lookup_customer",
+              "startTimeUnixNano": "1763510401100000000",
+              "endTimeUnixNano": "1763510401500000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": { "stringValue": "execute_tool" }
+                },
+                {
+                  "key": "gen_ai.tool.name",
+                  "value": { "stringValue": "lookup_customer" }
+                },
+                {
+                  "key": "gen_ai.tool.call.arguments",
+                  "value": { "stringValue": "{\"email\":\"ana@example.com\"}" }
+                },
+                {
+                  "key": "gen_ai.tool.call.result",
+                  "value": {
+                    "stringValue": "{\"customer_id\":\"c_42\",\"plan\":\"pro\"}"
+                  }
+                }
+              ]
+            },
+            {
+              "traceId": "5b8efff798038103d269b633813fc60c",
+              "spanId": "a4",
+              "parentSpanId": "a1",
+              "name": "chat gpt-4.1",
+              "startTimeUnixNano": "1763510401600000000",
+              "endTimeUnixNano": "1763510402500000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.request.model",
+                  "value": { "stringValue": "gpt-4.1" }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": { "intValue": 1500 }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": { "intValue": 60 }
+                }
+              ]
+            },
+            {
+              "traceId": "5b8efff798038103d269b633813fc60c",
+              "spanId": "a5",
+              "parentSpanId": "a1",
+              "name": "execute_tool get_invoices",
+              "startTimeUnixNano": "1763510402600000000",
+              "endTimeUnixNano": "1763510403000000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.tool.name",
+                  "value": { "stringValue": "get_invoices" }
+                },
+                {
+                  "key": "gen_ai.tool.call.arguments",
+                  "value": {
+                    "stringValue": "{\"customer_id\":\"c_42\",\"limit\":5}"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.result",
+                  "value": {
+                    "stringValue": "{\"invoices\":[{\"id\":\"in_1\",\"total\":90}]}"
+                  }
+                }
+              ]
+            },
+            {
+              "traceId": "9c1d2e3f4a5b60718293a4b5c6d7e8f9",
+              "spanId": "b1",
+              "name": "execute_tool lookup_customer",
+              "startTimeUnixNano": "1763514000000000000",
+              "endTimeUnixNano": "1763514000500000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.tool.name",
+                  "value": { "stringValue": "lookup_customer" }
+                },
+                {
+                  "key": "gen_ai.tool.call.arguments",
+                  "value": { "stringValue": "{\"email\":\"bo@example.com\"}" }
+                },
+                {
+                  "key": "error.type",
+                  "value": { "stringValue": "TimeoutError" }
+                }
+              ],
+              "status": { "code": 2, "message": "timed out" }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

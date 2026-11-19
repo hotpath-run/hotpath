@@ -1,0 +1,63 @@
+{
+  "name": "@hotpathrun/sdk",
+  "version": "0.2.0",
+  "description": "Record and replay agents whose tools are functions in their own code (no MCP server)",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hotpath-run/hotpath.git",
+    "directory": "packages/sdk"
+  },
+  "homepage": "https://hotpath.run",
+  "bugs": {
+    "url": "https://github.com/hotpath-run/hotpath/issues"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "llm",
+    "workflow",
+    "jit"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "prepack": "tsc -p tsconfig.build.json && node ../../scripts/copy-license.mjs"
+  },
+  "dependencies": {
+    "@hotpathrun/compiler": "workspace:*",
+    "@hotpathrun/recorder": "workspace:*",
+    "@hotpathrun/runtime": "workspace:*",
+    "@hotpathrun/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "vitest": "^2.1.8"
+  }
+}
