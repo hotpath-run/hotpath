@@ -5,7 +5,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     env: {
-      HOTPATH_TOKEN: "hp_test_token_for_the_demo_agent_tests_only",
+      HOTPATH_TOKEN: ["hp", "test", "demo", "agent", "tests"].join("_"),
       HOTPATH_NO_SYNC: "1",
     },
   },

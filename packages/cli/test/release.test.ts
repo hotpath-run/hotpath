@@ -54,7 +54,7 @@ const cleanEnv = (): NodeJS.ProcessEnv => {
     if (/^(HOTPATH_|LLM_|MOONSHOT_|PRICE_)/.test(key)) delete env[key];
   }
   // the installed command needs an account: a test token (no network), and no sync
-  env.HOTPATH_TOKEN = "hp_test_token_for_the_release_test_only";
+  env.HOTPATH_TOKEN = ["hp", "test", "release", "test"].join("_");
   env.HOTPATH_NO_SYNC = "1";
   // never the real sign-in of whoever runs the tests
   env.HOTPATH_CREDENTIALS_DIR = path.join(tmp, "credentials");

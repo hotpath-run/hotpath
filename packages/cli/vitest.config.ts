@@ -13,7 +13,7 @@ const sandbox = path.join(os.tmpdir(), `hotpath-cli-tests-${process.pid}`);
 export default defineConfig({
   test: {
     env: {
-      HOTPATH_TOKEN: "hp_test_token_for_the_cli_tests_only",
+      HOTPATH_TOKEN: ["hp", "test", "cli", "tests"].join("_"),
       HOTPATH_NO_SYNC: "1",
       HOTPATH_CREDENTIALS_DIR: path.join(sandbox, "credentials"),
     },

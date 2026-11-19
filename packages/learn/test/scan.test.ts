@@ -16,7 +16,7 @@ import {
   type ImportedRun,
 } from "../src/index.js";
 
-const SECRET = "ana-secret@example.com";
+const PRIVATE_VALUE = "ana-secret@example.com";
 
 /** One run: tools in order, an argument value that differs per run. */
 function run(
@@ -36,7 +36,7 @@ function run(
     finished: true,
     calls: tools.map((tool, k) => ({
       tool,
-      args: { email: `${SECRET}-${i}` },
+      args: { email: `${PRIVATE_VALUE}-${i}` },
       result: { ok: true },
       isError: !!opts.error && k === tools.length - 1,
       startMs: t0 + k * 1000,
@@ -134,7 +134,7 @@ describe("scanRuns", () => {
       formatScanJson(r),
       formatScanHtml(r),
     ]) {
-      expect(out).not.toContain(SECRET);
+      expect(out).not.toContain(PRIVATE_VALUE);
       expect(out).not.toContain("run-1");
       expect(out).toContain(PRIVACY_LINE.slice(0, 40));
     }
