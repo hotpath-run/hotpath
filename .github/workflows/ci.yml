@@ -40,5 +40,20 @@ jobs:
       - run: pnpm -r build
       # Every package runs even if one fails, and each failing test becomes an
       # annotation: readable on the run page without opening the logs.
-      - run: pnpm -r --no-bail test -- --reporter=default --reporter=github-actions
+      - name: Test
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm -r --no-bail test -- --reporter=default --reporter=github-actions 2>&1 | tee test-output.log
+
+      # A crash outside a test (a file that does not load, a failing setup) has no
+      # test to annotate: put its lines on the run page too, readable without the logs.
+      - name: Show test failures
+        if: failure()
+        shell: bash
+        run: |
+          sed 's/\x1b\[[0-9;]*m//g' test-output.log \
+            | grep -E "FAIL|Error|error|×|Unhandled|ELIFECYCLE|Timed out|timed out" \
+            | grep -v "^::" | head -40 \
+            | while IFS= read -r line; do echo "::error title=test output::${line}"; done
       - run: pnpm lint
