@@ -3,6 +3,7 @@
 import {
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   rm,
   stat,
@@ -121,6 +122,94 @@ describe("hotpath init", () => {
     expect(parseEnv(await readFile(envFile, "utf8")).LLM_API_KEY).toBe(
       FAKE_KEY,
     );
+  });
+
+  // 2026-11-19: `init --provider ollama --yes` run from a folder inside another
+  // project replaced that project's paid key with "ollama", with no copy left.
+  describe("an .env that already has a key for another setup", () => {
+    const OTHER_KEY = ["sk", "other", "fedcba9876543210"].join("-");
+    const original = [
+      "# Claude (paid)",
+      "LLM_BASE_URL=https://api.example-llm.com/v1/",
+      `LLM_API_KEY=${OTHER_KEY}`,
+      "HOTPATH_AGENT_MODEL=big-model",
+      "PRICE_AGENT_IN=2",
+      "",
+    ].join("\n");
+    const backups = async () =>
+      (await readdir(dir)).filter((f) => f.startsWith(".env.backup-"));
+
+    beforeEach(async () => {
+      await writeFile(envFile, original);
+    });
+
+    it("--yes refuses to replace it, leaves the file untouched, and says what to do", async () => {
+      const err = await runInit({
+        envFile,
+        provider: "ollama",
+        yes: true,
+        log,
+      }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(InitError);
+      const message = (err as Error).message;
+      expect(message).toContain(envFile);
+      expect(message).toMatch(/--force/);
+      expect(message).toMatch(/--home/);
+      expect(message).not.toContain(OTHER_KEY);
+      expect(await readFile(envFile, "utf8")).toBe(original);
+      expect(await backups()).toEqual([]);
+    });
+
+    it("asks before replacing it; Enter means no", async () => {
+      const asked: string[] = [];
+      const ask: Ask = async (q) => {
+        asked.push(q);
+        return "";
+      };
+      await expect(
+        runInit({ envFile, provider: "ollama", ask, log }),
+      ).rejects.toThrow(InitError);
+      expect(asked.some((q) => /replace/i.test(q))).toBe(true);
+      expect(asked.join("\n")).not.toContain(OTHER_KEY);
+      expect(await readFile(envFile, "utf8")).toBe(original);
+    });
+
+    it("on yes, keeps a copy of the old file first, and says where", async () => {
+      const ask: Ask = async (q) => (/replace/i.test(q) ? "y" : "");
+      await runInit({ envFile, provider: "ollama", ask, log });
+      expect(parseEnv(await readFile(envFile, "utf8")).LLM_API_KEY).toBe(
+        "ollama",
+      );
+      const [backup] = await backups();
+      expect(backup).toBeDefined();
+      expect(await readFile(path.join(dir, backup!), "utf8")).toBe(original);
+      const out = logs.join("\n");
+      expect(out).toContain(backup!);
+      expect(out).not.toContain(OTHER_KEY);
+    });
+
+    it("--force replaces it without asking, also with a copy", async () => {
+      await runInit({
+        envFile,
+        provider: "ollama",
+        yes: true,
+        force: true,
+        log,
+      });
+      expect(parseEnv(await readFile(envFile, "utf8")).LLM_API_KEY).toBe(
+        "ollama",
+      );
+      expect(await backups()).toHaveLength(1);
+    });
+
+    it("re-running for the same setup needs no confirmation and makes no copy", async () => {
+      await writeFile(
+        envFile,
+        "LLM_BASE_URL=http://localhost:11434/v1\nLLM_API_KEY=ollama\n",
+      );
+      await runInit({ envFile, provider: "ollama", yes: true, log });
+      expect(await backups()).toEqual([]);
+    });
   });
 
   it("explains what to pass when it can't ask", async () => {

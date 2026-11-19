@@ -112,6 +112,10 @@ First steps:
     .option("--agent-model <id>", "model that records tasks")
     .option("--cheap-model <id>", "model for the short AI steps in a replay")
     .option("-y, --yes", "accept the defaults, ask nothing")
+    .option(
+      "--force",
+      "replace a key that .env already has for another endpoint (a copy is kept)",
+    )
     .action(
       async (options: {
         provider?: string;
@@ -120,6 +124,7 @@ First steps:
         agentModel?: string;
         cheapModel?: string;
         yes?: boolean;
+        force?: boolean;
       }) => {
         try {
           await runInit({

@@ -19,6 +19,8 @@ export interface InitOptions {
   cheapModel?: string;
   /** accept the defaults instead of asking */
   yes?: boolean;
+  /** replace a key set up for something else without asking (a copy is still kept) */
+  force?: boolean;
   ask?: Ask;
   log?: (line: string) => void;
 }
@@ -142,6 +144,41 @@ export async function runInit(options: InitOptions): Promise<InitResult> {
     HOTPATH_CHEAP_MODEL: cheapModel,
     ...(preset.extra ?? {}),
   };
+
+  // A key set up for another endpoint may be the only copy of a paid key:
+  // never replace it silently (it happened from a folder inside a project).
+  const replacesKey =
+    !!existing.LLM_API_KEY &&
+    (existing.LLM_API_KEY !== apiKey || existing.LLM_BASE_URL !== baseUrl);
+  let backupFile: string | undefined;
+  if (replacesKey && existingText !== null) {
+    if (!options.force) {
+      const where = existing.LLM_BASE_URL || "another endpoint";
+      const refuse = () =>
+        new InitError(
+          `${options.envFile} already has a key for ${where}; nothing was changed. ` +
+            `To set up a new project in this folder instead, run: hotpath --home . init. ` +
+            `To replace it anyway (a copy of the old file is kept), add --force.`,
+        );
+      if (!ask) throw refuse();
+      const answer = (
+        await ask(
+          `${options.envFile} already has a key for ${where}. Replace it (a copy is kept)? [y/N]: `,
+        )
+      )
+        .trim()
+        .toLowerCase();
+      if (answer !== "y" && answer !== "yes") throw refuse();
+    }
+    backupFile = `${options.envFile}.backup-${new Date()
+      .toISOString()
+      .replace(/[-:]/g, "")
+      .replace("T", "-")
+      .slice(0, 15)}`;
+    await writeFile(backupFile, existingText, { mode: 0o600 });
+    await chmod(backupFile, 0o600).catch(() => undefined);
+  }
+
   await writeFile(options.envFile, setEnv(existingText ?? "", values), {
     mode: 0o600,
   });
@@ -156,6 +193,11 @@ export async function runInit(options: InitOptions): Promise<InitResult> {
   log(
     "The key stays in that file; Hotpath never prints or sends it anywhere else.",
   );
+  if (backupFile) {
+    log(
+      `The old settings, with the old key, are in ${backupFile}. Keep it out of version control.`,
+    );
+  }
   if (preset.id !== "ollama") {
     log(
       "Check the model names match your provider's exact ids: hotpath doctor lists what it finds.",

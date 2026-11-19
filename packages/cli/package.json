@@ -1,6 +1,6 @@
 {
   "name": "@hotpathrun/cli",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "The hotpath command line: record, compile, show, run and view",
   "license": "Apache-2.0",
   "repository": {
