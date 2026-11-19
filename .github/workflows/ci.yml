@@ -38,5 +38,7 @@ jobs:
 
       # No API keys here: tests mock the LLM, and `pnpm bench` is not run in CI.
       - run: pnpm -r build
-      - run: pnpm -r test
+      # Every package runs even if one fails, and each failing test becomes an
+      # annotation: readable on the run page without opening the logs.
+      - run: pnpm -r --no-bail test -- --reporter=default --reporter=github-actions
       - run: pnpm lint
