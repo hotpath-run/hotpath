@@ -3,6 +3,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   symlink,
   writeFile,
@@ -22,7 +23,9 @@ let dir: string;
 let stateDir: string;
 
 beforeEach(async () => {
-  dir = await mkdtemp(path.join(os.tmpdir(), "hotpath-wrap-"));
+  // wrap reports the config's real path (symlinks resolved); the temp folder sits
+  // behind a link on macOS (/var -> /private/var) and on Windows CI (RUNNER~1)
+  dir = await realpath(await mkdtemp(path.join(os.tmpdir(), "hotpath-wrap-")));
   stateDir = path.join(dir, ".hotpath");
 });
 afterEach(async () => {

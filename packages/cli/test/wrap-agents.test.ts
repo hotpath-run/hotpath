@@ -1,6 +1,13 @@
 // `hotpath wrap` for Cursor, Claude Desktop and VS Code: the same entry shape
 // as Claude Code in different files. Every test works in a temp folder.
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -22,7 +29,11 @@ let proj: string;
 let stateDir: string;
 
 beforeEach(async () => {
-  dir = await mkdtemp(path.join(os.tmpdir(), "hotpath-wrap-agents-"));
+  // wrap reports the config's real path (symlinks resolved); the temp folder sits
+  // behind a link on macOS (/var -> /private/var) and on Windows CI (RUNNER~1)
+  dir = await realpath(
+    await mkdtemp(path.join(os.tmpdir(), "hotpath-wrap-agents-")),
+  );
   home = path.join(dir, "home");
   proj = path.join(dir, "proj");
   stateDir = path.join(dir, ".hotpath");

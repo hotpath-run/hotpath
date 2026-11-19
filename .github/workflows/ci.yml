@@ -54,6 +54,6 @@ jobs:
         run: |
           sed 's/\x1b\[[0-9;]*m//g' test-output.log \
             | grep -E "FAIL|Error|error|×|Unhandled|ELIFECYCLE|Timed out|timed out" \
-            | grep -v "^::" | head -40 \
+            | grep -v -E "^::|\[recorder\]|✓|stdout \|" | head -40 \
             | while IFS= read -r line; do echo "::error title=test output::${line}"; done
       - run: pnpm lint
