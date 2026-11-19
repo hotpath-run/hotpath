@@ -9,6 +9,7 @@ import {
   mkdtemp,
   readdir,
   readFile,
+  realpath,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -65,7 +66,11 @@ const hotpath = (args: string[], cwd = project) =>
   run(hotpathBin, args, cwd, cleanEnv());
 
 beforeAll(async () => {
-  tmp = await mkdtemp(path.join(os.tmpdir(), "hotpath release é-"));
+  // real path: wrap reports resolved paths, and the temp folder sits behind a
+  // link on macOS (/var -> /private/var) and on Windows CI (RUNNER~1)
+  tmp = await realpath(
+    await mkdtemp(path.join(os.tmpdir(), "hotpath release é-")),
+  );
   project = path.join(tmp, "my project");
   await mkdir(project, { recursive: true });
   const out = path.join(tmp, "out");

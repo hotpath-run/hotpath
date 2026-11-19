@@ -2,7 +2,14 @@
 // and a server path that hold spaces and non-ASCII letters, as on a Windows
 // account named "Zoé Müller". Every part must come back out exactly as it went
 // in: the agent runs the command from an argument list.
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -18,7 +25,11 @@ let self: string[];
 let server: { command: string; args: string[]; env: Record<string, string> };
 
 beforeEach(async () => {
-  dir = await mkdtemp(path.join(os.tmpdir(), "hotpath Zoé Müller 日本-"));
+  // real path: wrap reports resolved paths, and the temp folder sits behind a
+  // link on macOS (/var -> /private/var) and on Windows CI (RUNNER~1)
+  dir = await realpath(
+    await mkdtemp(path.join(os.tmpdir(), "hotpath Zoé Müller 日本-")),
+  );
   home = path.join(dir, "Users", "Zoé Müller");
   proj = path.join(home, "My Projects", "café app");
   stateDir = path.join(proj, ".hotpath");

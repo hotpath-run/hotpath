@@ -134,7 +134,8 @@ describe("recorder proxy", () => {
     expect(new Date(trace.end.endedAt).getTime()).toBeGreaterThan(
       new Date(trace.meta.startedAt).getTime(),
     );
-  });
+    // it starts two node processes; a cold Windows CI runner took over 5 s
+  }, 30_000);
 
   it("proxied results deep-equal direct results from demo-tools", async () => {
     const task = taskName("m3-equality");
