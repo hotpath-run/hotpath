@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -18,14 +19,22 @@ export function sourceRoot(file: string = here): string | null {
 /** Files that mark a folder as a Hotpath project. */
 const MARKERS = [".hotpath", "hotpath.config.json"];
 
-/** The nearest folder at or above `start` that holds a marker, else null. */
+/**
+ * The nearest folder at or above `start` that holds a marker, else null. The
+ * home folder counts only with hotpath.config.json: a ~/.hotpath folder (where
+ * a pre-release 0.3.0 kept the sign-in) would otherwise make every folder under
+ * home part of one project.
+ */
 export function findProject(
   start: string,
   exists: (file: string) => boolean = existsSync,
+  home: string = os.homedir(),
 ): string | null {
   let dir = path.resolve(start);
+  const homeDir = path.resolve(home);
   for (;;) {
-    if (MARKERS.some((m) => exists(path.join(dir, m)))) return dir;
+    const markers = dir === homeDir ? ["hotpath.config.json"] : MARKERS;
+    if (markers.some((m) => exists(path.join(dir, m)))) return dir;
     const parent = path.dirname(dir);
     if (parent === dir) return null;
     dir = parent;
@@ -38,6 +47,8 @@ export interface ProjectRootOptions {
   /** null = not running from a checkout (an installed build) */
   source?: string | null;
   exists?: (file: string) => boolean;
+  /** the user's home folder (tests) */
+  home?: string;
 }
 
 /**
@@ -54,7 +65,7 @@ export function resolveProjectRoot(options: ProjectRootOptions = {}): string {
   const source = options.source === undefined ? sourceRoot() : options.source;
   if (source) return source;
   const cwd = options.cwd ?? process.cwd();
-  return findProject(cwd, options.exists) ?? path.resolve(cwd);
+  return findProject(cwd, options.exists, options.home) ?? path.resolve(cwd);
 }
 
 let cached: string | undefined;

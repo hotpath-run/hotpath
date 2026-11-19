@@ -13,6 +13,7 @@ import {
 } from "@hotpathrun/learn";
 import { defaultStateDir } from "@hotpathrun/scheduler";
 
+import type { AfterCommand } from "./sync/background.js";
 import { repoRoot } from "./wrap/self.js";
 
 function learnDirs(): LearnDirs {
@@ -24,7 +25,10 @@ function learnDirs(): LearnDirs {
   };
 }
 
-export function addLearnCommand(program: Command): void {
+export function addLearnCommand(
+  program: Command,
+  afterCommand: AfterCommand,
+): void {
   program
     .command("learn")
     .description(
@@ -63,6 +67,7 @@ export function addLearnCommand(program: Command): void {
               `${options.promote} is live: ${path.relative(repoRoot, result.workflowFile!)}\n` +
                 `run it with: hotpath run ${options.promote} --input <name>=<value>`,
             );
+            await afterCommand();
             return;
           }
           const hotAfter = options.hotAfter
@@ -72,6 +77,7 @@ export function addLearnCommand(program: Command): void {
               );
           const report = await learn(dirs, { hotAfter, auto: options.auto });
           console.log(formatLearnReport(report));
+          await afterCommand();
         } catch (err) {
           console.error(err instanceof Error ? err.message : String(err));
           process.exit(1);

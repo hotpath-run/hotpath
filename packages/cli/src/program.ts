@@ -11,7 +11,11 @@ import {
 } from "@hotpathrun/compiler";
 import { listModels, readTrace } from "@hotpathrun/shared";
 import { runRecorder } from "@hotpathrun/recorder";
-import { runTask, verifyOnRecording } from "@hotpathrun/runtime";
+import {
+  runTask,
+  verifyOnRecording,
+  type RunMetrics,
+} from "@hotpathrun/runtime";
 import {
   addSchedule,
   applyPlan,
@@ -44,11 +48,26 @@ import { createInterface } from "node:readline/promises";
 
 import rootPackage from "../../../package.json" with { type: "json" };
 
+import {
+  addAccountCommands,
+  addLoginGate,
+  defaultAccountDeps,
+  type AccountDeps,
+} from "./account/commands.js";
 import { describeForget, forgetTask, planForget } from "./forget.js";
 import { addDemoCommand } from "./demo.js";
 import { addLearnCommand } from "./learn.js";
 import { addScanCommand } from "./scan.js";
 import { registerProxy } from "./proxy.js";
+import {
+  detachedFlush,
+  type AfterCommand,
+  runFlush,
+  syncAfterCommand,
+  type SyncContext,
+} from "./sync/background.js";
+import { summarizeRun } from "./sync/summary.js";
+import { DriftError } from "@hotpathrun/runtime";
 import { buildReport, describeReport, writeReport } from "./report.js";
 import { formatDoctor, runDoctor } from "./setup/doctor.js";
 import { InitError, runInit, type Ask } from "./setup/init.js";
@@ -73,7 +92,27 @@ function collectInputs(
   return previous;
 }
 
-export function createProgram(): Command {
+export interface ProgramOptions {
+  account?: Partial<AccountDeps>;
+  sync?: Partial<SyncContext>;
+}
+
+export function createProgram(options: ProgramOptions = {}): Command {
+  const account: AccountDeps = {
+    ...defaultAccountDeps(rootPackage.version),
+    // a caller that picks its own sign-in folder (tests) never moves the
+    // user's real one
+    ...(options.account?.dir ? { legacyDir: undefined } : {}),
+    ...options.account,
+  };
+  const syncCtx: SyncContext = {
+    stateDir,
+    workflowsDir,
+    env: account.env,
+    startFlush: detachedFlush(selfCommand(), account.env),
+    ...options.sync,
+  };
+  const afterCommand: AfterCommand = (runs) => syncAfterCommand(syncCtx, runs);
   const program = new Command();
   program
     .name("hotpath")
@@ -84,10 +123,25 @@ export function createProgram(): Command {
       "--home <dir>",
       "project folder (traces, workflows, .env); must come first. Default: HOTPATH_HOME, else the folder you are in",
     );
+  addLoginGate(program, account);
+  addAccountCommands(program, account);
+  program
+    .command("sync-flush", { hidden: true })
+    .description("(internal) send the queued run summaries")
+    .action(() =>
+      runFlush({
+        stateDir: syncCtx.stateDir,
+        dir: account.dir,
+        env: account.env,
+        fetch: account.fetch,
+        client: `hotpath-cli/${rootPackage.version}`,
+      }),
+    );
   program.addHelpText(
     "after",
     `
 First steps:
+  0. hotpath login                                 sign in (free account; opens your browser)
   1. hotpath init                                  pick a model provider, write .env
   2. hotpath doctor                                check it works; lists your agents
      (hotpath demo                                 try it on the bundled demo agent first)
@@ -221,6 +275,7 @@ First steps:
           console.log(formatCompileResult(workflow));
           for (const note of notes) console.log(`+ ${note}`);
           for (const warning of warnings) console.log(`⚠ ${warning}`);
+          await afterCommand();
         }),
     );
 
@@ -264,17 +319,39 @@ First steps:
           acceptRecompile?: boolean;
         },
       ) => {
+        const startedAt = new Date();
+        let metrics: RunMetrics | undefined;
+        let ok = true;
         try {
-          await runTask(task, {
+          metrics = await runTask(task, {
             inputs: options.input,
             dryRun: options.dryRun,
             noFallback: !options.fallback,
             acceptRecompile: options.acceptRecompile,
           });
         } catch (err) {
+          ok = false;
+          if (err instanceof DriftError) metrics = err.metrics;
           console.error(err instanceof Error ? err.message : String(err));
-          process.exit(1);
         }
+        if (metrics) {
+          // the workflow's recorded baseline: what the agent run it came from took
+          const baseline = await loadWorkflow(task)
+            .then((w) => w.baseline)
+            .catch(() => undefined);
+          await afterCommand([
+            summarizeRun({
+              workflow: task,
+              kind: "replay",
+              ok,
+              dryRun: options.dryRun,
+              metrics,
+              baseline,
+              startedAt,
+            }),
+          ]);
+        }
+        if (!ok) process.exit(1);
       },
     );
 
@@ -459,9 +536,9 @@ First steps:
 
   addScheduleCommands(program);
   addDaemonCommands(program);
-  addLearnCommand(program);
+  addLearnCommand(program, afterCommand);
   addScanCommand(program);
-  addDemoCommand(program);
+  addDemoCommand(program, afterCommand);
 
   return program;
 }

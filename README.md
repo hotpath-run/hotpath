@@ -10,7 +10,7 @@ Hotpath watches your agent run, finds the paths it repeats, and compiles them in
 - **Faster.** Up to 8× faster on repeated data and about 2.5× faster on new data (two tasks, Claude, 10 runs each). The model call is most of the remaining time.
 - **Checked.** Every report is checked against the data before it is sent. Sums, counts and currency and time-zone conversions are recomputed by code, not by the model. The replay noticed 8 of 8 kinds of data change we tested and handed the run to the agent instead of guessing.
 - **Safe to retry.** A run that crashes between two actions does not repeat the first one when run again.
-- **Local first.** It works on a free local model (Ollama). The engine sends nothing to us; the only network calls are to the model provider you choose.
+- **Local first.** It works on a free local model (Ollama). Your data, prompts and tool arguments stay on your machine; the only network calls are to the model provider you choose and, for your account, the run summaries described in [Why an account?](#why-an-account).
 
 These numbers come from synthetic benchmark tasks; the runs, models and failures are published in [`docs/BENCHMARK.md`](docs/BENCHMARK.md). On a small free 1.7B model doing everything, 54% of 99 suite runs passed (87% where the recording was good): a replay is only as good as its recording, so record with a capable agent.
 
@@ -19,11 +19,14 @@ These numbers come from synthetic benchmark tasks; the runs, models and failures
 You need Node 22 or newer and one model: [Ollama](https://ollama.com) (free, local) or any OpenAI-compatible API key.
 
 ```bash
+npx @hotpathrun/cli login          # step 1: sign in to your free account (opens your browser)
 ollama pull qwen3:1.7b          # skip this if you use an API key
 mkdir hotpath-try && cd hotpath-try
 npx @hotpathrun/cli init           # pick Ollama or a provider; writes .env here
 npx @hotpathrun/cli demo           # the one-command trial, explained below
 ```
+
+`login` shows a code and opens hotpath.run so you can approve it; do it once per computer.
 
 `init --provider ollama --yes` asks nothing and sets up Ollama. `hotpath demo` then does three things, and tells you which one it is on:
 
@@ -44,9 +47,18 @@ The demo needs a model that can call tools. `qwen3:1.7b` is enough for it; if a 
 
 To keep the command around: `npm i -g @hotpathrun/cli`, then `hotpath demo` and `hotpath --help`.
 
+## Why an account?
+
+The CLI needs a free [hotpath.run](https://hotpath.run) account, and it is still open source (Apache-2.0). The account puts your workflows and runs on a dashboard: hit rate, time and cost saved, and what fell back to the agent.
+
+- **Only run summaries are synced, never your data.** What is sent: a workflow's name, its step counts and a graph of tool names and step kinds, and per run the time, cost, number of model calls and whether it fell back. Never tool arguments or results, prompts, model output, inputs, file paths or `.env` values.
+- **Turn sync off** with `HOTPATH_NO_SYNC=1`. You still need to be signed in.
+- **In CI,** create a token under Settings → CLI sessions on the dashboard and set `HOTPATH_TOKEN`; no login step is needed.
+- `hotpath whoami` shows who you are signed in as, `hotpath logout` signs this computer out and revokes its session. The sign-in is kept in `credentials.json` in your settings folder (`%APPDATA%\hotpath` on Windows, `~/.config/hotpath` elsewhere), readable only by you; it is checked online at most once a day, and the CLI keeps working offline for up to 7 days.
+
 ## Try it in Claude Code
 
-The same demo, with Claude Code as the agent. The tools are fake (emails, calendar and weather from bundled files), so nothing real is read or sent. In the `hotpath-try` folder from the quickstart:
+The same demo, with Claude Code as the agent (sign in first with `npx @hotpathrun/cli login`; the recorder Claude Code starts uses that sign-in). The tools are fake (emails, calendar and weather from bundled files), so nothing real is read or sent. In the `hotpath-try` folder from the quickstart:
 
 ```bash
 claude mcp add hotpath-demo -- npx -y @hotpathrun/cli record --task morning-brief -- npx -y @hotpathrun/cli demo-tools

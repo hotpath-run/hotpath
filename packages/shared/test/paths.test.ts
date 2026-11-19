@@ -53,6 +53,28 @@ describe("project root", () => {
     expect(findProject(abs("other"), exists)).toBe(abs("other"));
   });
 
+  // 0.3.0 before release kept the sign-in in ~/.hotpath, and every folder under
+  // the home folder then counted as part of a project at the home folder.
+  it("the home folder is a project only with hotpath.config.json, not .hotpath", () => {
+    const home = abs("Users", "me");
+    const work = path.join(home, "code", "agent");
+    const onlyDotHotpath = (file: string) =>
+      file === path.join(home, ".hotpath");
+    expect(findProject(work, onlyDotHotpath, home)).toBeNull();
+    expect(
+      resolveProjectRoot({
+        env: {},
+        source: null,
+        cwd: work,
+        exists: onlyDotHotpath,
+        home,
+      }),
+    ).toBe(work);
+    const withConfig = (file: string) =>
+      file === path.join(home, "hotpath.config.json");
+    expect(findProject(work, withConfig, home)).toBe(home);
+  });
+
   it("installed, in a folder that is not a project yet: that folder", () => {
     expect(
       resolveProjectRoot({

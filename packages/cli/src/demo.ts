@@ -10,12 +10,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { Command } from "commander";
-import { tracesDir, workflowsDir } from "@hotpathrun/compiler";
+import { loadWorkflow, tracesDir, workflowsDir } from "@hotpathrun/compiler";
 import { formatLearnReport, learn } from "@hotpathrun/learn";
 import { runTask } from "@hotpathrun/runtime";
 import { defaultStateDir } from "@hotpathrun/scheduler";
 import { projectRoot, runningFromSource } from "@hotpathrun/shared";
 
+import { summarizeRun, type RunSummary } from "./sync/summary.js";
+import type { AfterCommand } from "./sync/background.js";
+import { GATE_MARKER } from "./account/gate.js";
 import { runAgent } from "../../../examples/demo-agent/src/agent.js";
 import { selfCommand } from "./wrap/self.js";
 
@@ -50,7 +53,10 @@ function hasModelSettings(root: string): boolean {
   );
 }
 
-export function addDemoCommand(program: Command): void {
+export function addDemoCommand(
+  program: Command,
+  afterCommand: AfterCommand,
+): void {
   // The tool server the recorder wraps. Hidden: it speaks MCP on stdout, so it
   // must not print anything else.
   program
@@ -93,7 +99,19 @@ export function addDemoCommand(program: Command): void {
           DEMO_FIXTURES_DIR: fixtures,
           DEMO_OUT_DIR: path.join(root, "out"),
           DEMO_FIXTURES: "default",
+          // the MCP SDK passes a child only the variables listed here, so the
+          // recorder it starts would not see that this command passed the login gate
+          ...(process.env[GATE_MARKER]
+            ? { [GATE_MARKER]: process.env[GATE_MARKER] }
+            : {}),
+          ...(process.env.HOTPATH_TOKEN
+            ? { HOTPATH_TOKEN: process.env.HOTPATH_TOKEN }
+            : {}),
+          ...(process.env.HOTPATH_NO_SYNC
+            ? { HOTPATH_NO_SYNC: process.env.HOTPATH_NO_SYNC }
+            : {}),
         };
+        const summaries: RunSummary[] = [];
         console.log(
           `Step 1 of 3: the agent does the "${TASK}" task (a model call each; every tool call is recorded)`,
         );
@@ -121,6 +139,15 @@ export function addDemoCommand(program: Command): void {
                 env,
               },
             });
+            summaries.push(
+              summarizeRun({
+                workflow: TASK,
+                kind: "record",
+                ok: true,
+                metrics: { ...metrics, fallback: false },
+                startedAt: new Date(Date.now() - metrics.durationMs),
+              }),
+            );
             console.log(
               `  run ${done + 1} (${date}): ${metrics.llmCalls} model calls, ${(metrics.durationMs / 1000).toFixed(1)} s`,
             );
@@ -153,7 +180,20 @@ export function addDemoCommand(program: Command): void {
           `\nStep 3 of 3: replay "${id}" on new data (${date}); the model is called only where judgment is needed`,
         );
         const start = Date.now();
-        await runTask(id, { inputs: { date } });
+        const replayed = await runTask(id, { inputs: { date } });
+        const baseline = await loadWorkflow(id)
+          .then((w) => w.baseline)
+          .catch(() => undefined);
+        summaries.push(
+          summarizeRun({
+            workflow: id,
+            kind: "replay",
+            ok: true,
+            metrics: replayed,
+            baseline,
+            startedAt: new Date(start),
+          }),
+        );
         console.log(
           `replay took ${((Date.now() - start) / 1000).toFixed(1)} s`,
         );
@@ -167,6 +207,7 @@ export function addDemoCommand(program: Command): void {
         } catch {
           // the demo message file is only a courtesy
         }
+        await afterCommand(summaries);
         console.log(
           `\nDone. See the workflow: hotpath show ${id}   or   hotpath view ${id}`,
         );

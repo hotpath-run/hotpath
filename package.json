@@ -1,6 +1,6 @@
 {
   "name": "hotpath",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Record your AI agent once. Replay it faster and cheaper, with AI only where judgment is needed.",
   "license": "Apache-2.0",
   "repository": {

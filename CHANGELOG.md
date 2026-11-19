@@ -2,6 +2,11 @@
 
 All notable changes. Versions follow [semantic versioning](https://semver.org); before 1.0 a minor version may change behaviour, and the change is listed here.
 
+## 0.3.0
+
+- **A free hotpath.run account is now required.** `hotpath login` (device flow: it shows a code and opens your browser), `hotpath logout` and `hotpath whoami`. Every other command asks you to sign in first; `--help`, `--version` and the internal `demo-tools` do not. For CI, set `HOTPATH_TOKEN`. The sign-in is kept in your settings folder (`%APPDATA%\hotpath` on Windows, `~/.config/hotpath` elsewhere), checked online at most once a day, and works offline for up to 7 days.
+- **Run summaries sync to your dashboard** after `run`, `demo`, `learn` and `compile`, in the background (it never slows or fails the command; what cannot be sent waits in `.hotpath/sync-queue.json`). Only summaries are sent: workflow names, step counts, a graph of tool names and step kinds, and per run the time, cost, model calls and fallback. Never arguments, results, prompts, model output, inputs, paths or `.env` values. `HOTPATH_NO_SYNC=1` turns it off.
+
 ## 0.2.2
 
 - `hotpath demo-tools` (the demo's fake MCP server) now works when an MCP client such as Claude Code starts it on its own: it finds its bundled data, and what it "sends" goes to `out/messages.json` in your project folder. Before this, it only worked inside `hotpath demo`.
