@@ -44,7 +44,7 @@
     "prepack": "node ../../scripts/build-cli.mjs"
   },
   "devDependencies": {
-    "commander": "^12.1.0",
+    "commander": "^15.1.0",
     "cross-spawn": "^7.0.6",
     "@hotpathrun/compiler": "workspace:*",
     "@hotpathrun/learn": "workspace:*",
