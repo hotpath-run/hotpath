@@ -1,5 +1,8 @@
 import {
+  countItems,
   renderTemplate,
+  type BranchStep,
+  type CaseStep,
   type Condition,
   type GroundingEntry,
   type LlmStep,
@@ -8,9 +11,25 @@ import {
   type WorkflowStep,
 } from "@hotpathrun/shared";
 
-import { compileTraceDetailed, type RecordedResult } from "./compiler.js";
-import { mergePaths } from "./paths.js";
-import { features, learnRule, type Feature } from "./rules.js";
+import {
+  compileTraceDetailed,
+  textArgKey,
+  type CompileHints,
+  type ItemSamples,
+  type ListSource,
+  inferCommonSchema,
+  type RecordedResult,
+} from "./compiler.js";
+import { mergePaths, renameIds, renameRecorded } from "./paths.js";
+import {
+  features,
+  givenInputs,
+  learnInputRule,
+  learnItemRule,
+  learnRule,
+  varyingInputs,
+  type Feature,
+} from "./rules.js";
 
 export { learnRule };
 
@@ -33,6 +52,10 @@ export interface Compiled {
   sig: string[];
   /** the step id behind each sig entry */
   ids: string[];
+  /** sig, with each step's short constant arguments: tells get_weather(Oslo) from get_weather(Paris) */
+  keys: string[];
+  /** per sig entry: the step changes something outside (its order matters) */
+  effects: boolean[];
 }
 
 export interface BranchResult {
@@ -46,8 +69,16 @@ export interface BranchResult {
   recorded: RecordedResult[];
 }
 
-function compile(trace: TraceFile, compiledFrom: string): Compiled {
-  const { workflow, recorded } = compileTraceDetailed(trace, compiledFrom);
+function compile(
+  trace: TraceFile,
+  compiledFrom: string,
+  hints: CompileHints = {},
+): Compiled {
+  const { workflow, recorded } = compileTraceDetailed(
+    trace,
+    compiledFrom,
+    hints,
+  );
   const steps = workflow.steps.filter((s) => s.type !== "llm");
   return {
     trace,
@@ -62,7 +93,119 @@ function compile(trace: TraceFile, compiledFrom: string): Compiled {
         : (s as { tool: string }).tool,
     ),
     ids: steps.map((s) => s.id),
+    effects: steps.map((s) =>
+      s.type === "foreach"
+        ? s.body[0]!.sideEffect
+        : (s as { sideEffect?: boolean }).sideEffect === true,
+    ),
+    keys: steps.map((s) => {
+      const tool = s.type === "foreach" ? s.body[0]! : s;
+      const consts = Object.entries(
+        (tool as { args: Record<string, unknown> }).args,
+      )
+        .filter(
+          ([, v]) =>
+            typeof v === "string" && !v.includes("{{") && v.length < 40,
+        )
+        .map(([k, v]) => `${k}=${String(v)}`);
+      return `${(tool as { tool: string }).tool}${s.type === "foreach" ? "*" : ""}(${consts.join(",")})`;
+    }),
   };
+}
+
+/**
+ * `c` without the reads no other recording made: they change nothing, so they
+ * are no reason to call two recordings different paths. Only the view used to
+ * compare is trimmed; the workflow keeps every step.
+ */
+function withoutNoise(c: Compiled, all: Compiled[]): Compiled {
+  const keep = c.keys.map(
+    (key, i) =>
+      c.effects[i] || all.some((o) => o !== c && o.keys.includes(key)),
+  );
+  const pick = <T>(xs: T[]) => xs.filter((_, i) => keep[i]);
+  return {
+    ...c,
+    sig: pick(c.sig),
+    ids: pick(c.ids),
+    keys: pick(c.keys),
+    effects: pick(c.effects),
+  };
+}
+
+/**
+ * Where `own`'s steps sit among `base`'s: by tool, and between steps of one
+ * tool by constant arguments (a noise read of Oslo's weather must not take the
+ * place of the read of Paris's). When no placement matches every constant, the
+ * one with the fewest differences is used: a text that differs between
+ * recordings is the same step.
+ */
+export function align(own: Compiled, base: Compiled): number[] | null {
+  const ordered = embedClosest(own, base);
+  const exact = ordered?.every((j, i) => own.keys[i] === base.keys[j]);
+  return exact ? ordered! : (matchReordered(own, base) ?? ordered);
+}
+
+/**
+ * Like embed over the tools, but between steps of one tool it prefers the one
+ * with the same constant arguments: the fewest mismatches wins, ties go to
+ * the earliest placement. Null when the tools are not a subsequence.
+ */
+export function embedClosest(
+  sub: { sig: string[]; keys: string[] },
+  sup: { sig: string[]; keys: string[] },
+): number[] | null {
+  const n = sub.sig.length;
+  const m = sup.sig.length;
+  // best[i][j]: fewest mismatches placing sub[i..] into sup[j..]
+  const best: number[][] = Array.from({ length: n + 1 }, () =>
+    new Array<number>(m + 1).fill(Infinity),
+  );
+  for (let j = 0; j <= m; j++) best[n]![j] = 0;
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      const skip = best[i]![j + 1]!;
+      const take =
+        sub.sig[i] === sup.sig[j]
+          ? best[i + 1]![j + 1]! + (sub.keys[i] === sup.keys[j] ? 0 : 1)
+          : Infinity;
+      best[i]![j] = Math.min(skip, take);
+    }
+  }
+  if (!Number.isFinite(best[0]![0]!)) return null;
+  const at: number[] = [];
+  let j = 0;
+  for (let i = 0; i < n; i++) {
+    // earliest j that still reaches the optimum for this step
+    while (true) {
+      const take =
+        sub.sig[i] === sup.sig[j]
+          ? best[i + 1]![j + 1]! + (sub.keys[i] === sup.keys[j] ? 0 : 1)
+          : Infinity;
+      if (take === best[i]![j]) break;
+      j++;
+    }
+    at.push(j++);
+  }
+  return at;
+}
+
+/**
+ * Two agents read the same things in another order (weather before the stats,
+ * or after): every step of `own` has an identical step in `base`, and the
+ * steps that change something keep their order. Null otherwise.
+ */
+function matchReordered(own: Compiled, base: Compiled): number[] | null {
+  const used = new Set<number>();
+  const at: number[] = [];
+  for (const key of own.keys) {
+    const j = base.keys.findIndex((k, ix) => k === key && !used.has(ix));
+    if (j === -1) return null;
+    used.add(j);
+    at.push(j);
+  }
+  const acting = at.filter((_, i) => own.effects[i]);
+  return acting.every((j, i) => i === 0 || j > acting[i - 1]!) ? at : null;
 }
 
 /** Indices in `sup` that `sub` occupies, in order; null when it isn't a subsequence. */
@@ -122,6 +265,82 @@ export function sameShapes(a: TraceFile, b: TraceFile): boolean {
 
 const MAX_EXAMPLE_CHARS = 1500;
 
+/**
+ * What recordings teach each other before they are merged. A tool one
+ * recording called once per item is a loop in all of them (a day with one
+ * item shows a single call, a day with none shows nothing). A text argument
+ * that is not identical in the same step of two recordings is never a
+ * constant: it is written at run time, however short it is.
+ */
+export function learnHints(all: Compiled[]): CompileHints {
+  const loopTools = new Set<string>();
+  for (const c of all) {
+    for (const t of c.sig) if (t.endsWith("*")) loopTools.add(t.slice(0, -1));
+  }
+  // the recording that made every step any other one made, as compileTraces picks it
+  const base =
+    [...all].reverse().find((c) => all.every((o) => align(o, c))) ??
+    all[all.length - 1]!;
+  const textArgs = new Set<string>();
+  // a step that reads a list position (items.0.id) is a loop in disguise when
+  // the position differs between recordings or the step is missing from some
+  const positional = new Map<
+    string,
+    { templates: Set<string>; runs: number }
+  >();
+  for (const c of all) {
+    const seen = new Set<string>();
+    for (const step of c.workflow.steps) {
+      if (step.type !== "tool") continue;
+      for (const [key, v] of Object.entries(step.args)) {
+        if (typeof v !== "string") continue;
+        // a text written by the model in one recording is text in all of them
+        const out = /^\{\{steps\.([^.}]+)\.output\}\}$/.exec(v);
+        if (
+          out &&
+          c.workflow.steps.some((o) => o.id === out[1] && o.type === "llm")
+        ) {
+          textArgs.add(textArgKey(step.tool, key));
+        }
+        if (/\{\{steps\.[^}]*\.\d+(\.[^}]*)?\}\}/.test(v)) {
+          const entry = positional.get(step.tool) ?? {
+            templates: new Set(),
+            runs: 0,
+          };
+          entry.templates.add(v);
+          if (!seen.has(step.tool)) entry.runs++;
+          seen.add(step.tool);
+          positional.set(step.tool, entry);
+        }
+      }
+    }
+  }
+  for (const [tool, { templates, runs }] of positional) {
+    if (templates.size > 1 || runs < all.length) loopTools.add(tool);
+  }
+  for (const other of all) {
+    if (other === base) continue;
+    const ids = idMap(other, base);
+    if (!ids) continue;
+    for (const step of other.workflow.steps) {
+      const mapped = base.workflow.steps.find((s) => s.id === ids.get(step.id));
+      if (step.type !== "tool" || mapped?.type !== "tool") continue;
+      for (const [key, a] of Object.entries(step.args)) {
+        const b = mapped.args[key];
+        const constant = (v: unknown): v is string =>
+          typeof v === "string" && !v.includes("{{");
+        if (constant(a) && constant(b) && a !== b) {
+          textArgs.add(textArgKey(step.tool, key));
+        }
+      }
+    }
+  }
+  return { loopTools, textArgs };
+}
+
+const hasHints = (h: CompileHints) =>
+  (h.loopTools?.size ?? 0) > 0 || (h.textArgs?.size ?? 0) > 0;
+
 function describe(step: WorkflowStep): string {
   if (step.type === "llm") return "write text";
   if (step.type === "branch") return "choose a path";
@@ -148,9 +367,212 @@ function feeders(workflow: Workflow, toolIds: Set<string>): string[] {
   return out;
 }
 
+/**
+ * The recording the workflow is built from: the one that read the most list
+ * items, the newest among equals. Figures are learned from it, and a day with
+ * one item cannot tell a total from that item's amount.
+ */
+function richest(candidates: Compiled[]): Compiled {
+  const size = (c: Compiled) =>
+    c.results.reduce((n, r) => n + countItems(r.result), 0);
+  return candidates.reduce((best, c) => (size(c) >= size(best) ? c : best));
+}
+
+/**
+ * A tool step's schema is what EVERY recording's results had, not what the
+ * recording the workflow was built from had: a field null in one recording and
+ * a string in another must accept both, or the workflow stops on data it was
+ * compiled from. Only when the recordings made the same steps in the same
+ * order, so a step is the same step in each.
+ */
+function widenGuards(
+  workflow: Workflow,
+  base: Compiled,
+  all: Compiled[],
+): Workflow {
+  if (
+    all.length < 2 ||
+    !all.every(
+      (c) =>
+        c.sig.join() === base.sig.join() && c.ids.length === base.ids.length,
+    )
+  ) {
+    return workflow;
+  }
+  const schemas = new Map<string, Record<string, unknown>>();
+  base.ids.forEach((id, i) => {
+    const values: unknown[] = [];
+    for (const c of all) {
+      const found = c.results.find((r) => r.id === c.ids[i]);
+      if (!found) return;
+      if (found.field === "results")
+        values.push(...(found.result as unknown[]));
+      else values.push(found.result);
+    }
+    schemas.set(id, inferCommonSchema(values));
+  });
+  const widen = <T extends WorkflowStep>(step: T): T => {
+    if (step.type === "tool" && step.guard.schema && schemas.has(step.id)) {
+      return {
+        ...step,
+        guard: { ...step.guard, schema: schemas.get(step.id)! },
+      };
+    }
+    if (step.type === "foreach" && schemas.has(step.id)) {
+      return {
+        ...step,
+        body: step.body.map((b) =>
+          b.guard.schema
+            ? { ...b, guard: { ...b.guard, schema: schemas.get(step.id)! } }
+            : b,
+        ),
+      };
+    }
+    return step;
+  };
+  return { ...workflow, steps: workflow.steps.map(widen) };
+}
+
 export function compileTraces(
   traces: TraceFile[],
   compiledFrom: string,
+): BranchResult {
+  const result = compileUsed(traces, compiledFrom, true);
+  const usedTraces = result.used.map((i) => traces[i]!);
+  return {
+    ...result,
+    workflow: {
+      ...result.workflow,
+      inputs: declareInputs(result.workflow.inputs, usedTraces),
+    },
+  };
+}
+
+/**
+ * The workflow's inputs: required are the ones every recording had, the others
+ * (a customer gave an email, not an order id) are optional, or a run with only
+ * an email would be refused for the missing order id.
+ */
+function declareInputs(
+  declared: Workflow["inputs"],
+  traces: TraceFile[],
+): Workflow["inputs"] {
+  const inputs = traces.map((t) => t.meta.inputs);
+  const optional = new Set(varyingInputs(inputs));
+  const out: Workflow["inputs"] = { ...declared };
+  for (const name of optional) {
+    const from = [...inputs]
+      .reverse()
+      .find((i) => givenInputs(i, [name]).length);
+    const value = from?.[name];
+    out[name] = {
+      ...(out[name] ?? { type: typeof value, example: value }),
+      required: false,
+    };
+  }
+  return out;
+}
+
+const signatureOf = (steps: Array<WorkflowStep | CaseStep>): string =>
+  steps
+    .map((s) =>
+      s.type === "tool"
+        ? `${s.tool}${JSON.stringify(s.args)}`
+        : s.type === "foreach"
+          ? `each ${s.over} ${signatureOf(s.body)}`
+          : s.type,
+    )
+    .join(">");
+
+/**
+ * Recordings that were given different inputs (an order id, or an email) and
+ * then took different steps: one workflow with a case per kind of input, each
+ * case compiled from its own recordings. The rule is on the inputs, because
+ * nothing has been read yet when the first step is chosen, so a question to
+ * the replay model would have nothing to judge from. Null when the inputs do
+ * not differ, the steps do not, or no input tells a group from the others.
+ */
+function splitByInputs(
+  used: Array<{ t: TraceFile; i: number }>,
+  compiledFrom: string,
+): BranchResult | null {
+  const inputs = used.map(({ t }) => t.meta.inputs);
+  const names = varyingInputs(inputs);
+  if (names.length === 0) return null;
+  const groups = new Map<string, number[]>();
+  inputs.forEach((inp, k) => {
+    const key = givenInputs(inp, names).join();
+    groups.set(key, [...(groups.get(key) ?? []), k]);
+  });
+  if (groups.size < 2) return null;
+  const parts = [...groups].map(([key, members]) => ({
+    key,
+    members,
+    result: compileUsed(
+      members.map((k) => used[k]!.t),
+      compiledFrom,
+      false,
+    ),
+  }));
+  if (
+    parts.some((p) =>
+      p.result.workflow.steps.some((s) => s.type === "branch"),
+    ) ||
+    new Set(parts.map((p) => signatureOf(p.result.workflow.steps))).size < 2
+  ) {
+    return null;
+  }
+  const newestPart = parts.findIndex((p) =>
+    p.members.includes(used.length - 1),
+  );
+  const cases: BranchStep["cases"] = [];
+  let otherwise: CaseStep[] | undefined;
+  const recorded: RecordedResult[] = [];
+  for (const [gi, part] of parts.entries()) {
+    const own = part.result.workflow.steps as CaseStep[];
+    const steps = gi === newestPart ? own : renameIds(own, `b${gi}`);
+    recorded.push(
+      ...(gi === newestPart
+        ? part.result.recorded
+        : renameRecorded(part.result.recorded, own, `b${gi}`)),
+    );
+    if (part.key === "") {
+      otherwise = steps;
+      continue;
+    }
+    const rule = learnInputRule(
+      part.members.map((k) => inputs[k]!),
+      parts
+        .filter((o) => o !== part)
+        .flatMap((o) => o.members.map((k) => inputs[k]!)),
+    );
+    if (!rule) return null;
+    cases.push({ label: `${part.key} given`, when: rule, steps });
+  }
+  if (cases.length === 0) return null;
+  const newestWorkflow = parts[newestPart]!.result.workflow;
+  const branch: BranchStep = {
+    id: "b1",
+    type: "branch",
+    cases,
+    ...(otherwise ? { else: otherwise } : {}),
+  };
+  return {
+    workflow: { ...newestWorkflow, steps: [branch], compiledFrom },
+    used: used.map((u) => u.i),
+    warnings: parts.flatMap((p) => p.result.warnings),
+    notes: [
+      `b1 chooses the path from the inputs: ${parts.map((p) => p.key || "none of them").join(" | ")}`,
+      ...parts.flatMap((p) => p.result.notes),
+    ],
+    recorded,
+  };
+}
+
+function compileUsed(
+  traces: TraceFile[],
+  compiledFrom: string,
+  allowSplit: boolean,
 ): BranchResult {
   if (traces.length === 0) throw new Error("no recordings to compile");
   const newestTrace = traces[traces.length - 1]!;
@@ -159,14 +581,39 @@ export function compileTraces(
     .map((t, i) => ({ t, i }))
     .filter(({ t }, i) => i === traces.length - 1 || sameShapes(t, newestTrace))
     .slice(-MAX_RECORDINGS);
+  if (allowSplit && used.length > 1) {
+    const split = splitByInputs(used, compiledFrom);
+    if (split) return split;
+  }
   const warnings: string[] = [];
-  const all = used.map(({ t }) => compile(t, compiledFrom));
-  const newest = all[all.length - 1]!;
+  let all = used.map(({ t }) => compile(t, compiledFrom));
+  const hints = learnHints(all);
+  if (hasHints(hints)) {
+    // first pass with the loops known: which items each tool acted on, in all recordings
+    // (twice: the first pass finds the lists, the second counts the runs that skipped the tool)
+    const sources = new Map<string, ListSource>();
+    used.forEach(({ t }) =>
+      compile(t, compiledFrom, { ...hints, samples: new Map(), sources }),
+    );
+    const samples = new Map<string, ItemSamples>();
+    used.forEach(({ t }) =>
+      compile(t, compiledFrom, { ...hints, samples, sources }),
+    );
+    const itemRules = new Map<string, Condition>();
+    for (const [tool, got] of samples) {
+      const rule = got.no.length > 0 ? learnItemRule(got.yes, got.no) : null;
+      if (rule) itemRules.set(tool, rule);
+    }
+    all = used.map(({ t }) =>
+      compile(t, compiledFrom, { ...hints, itemRules }),
+    );
+  }
+  let newest = all[all.length - 1]!;
   const indices = used.map((u) => u.i);
   const finish = (base: Compiled, workflow: Workflow): BranchResult => {
     const learned = learnCoverage(base, workflow, all);
     return {
-      workflow: learned.workflow,
+      workflow: widenGuards(learned.workflow, base, all),
       used: indices,
       warnings,
       notes: learned.notes,
@@ -174,13 +621,25 @@ export function compileTraces(
     };
   };
   const plain = (): BranchResult => finish(newest, newest.workflow);
-  if (all.length === 1 || all.every((c) => c.sig.join() === newest.sig.join()))
-    return plain();
+  if (all.length === 1) return plain();
+  // an agent that looked at something the others never read (noise) should
+  // not stop the recordings from being compared
+  const quiet = all.map((c) => withoutNoise(c, all));
+  if (
+    quiet.some((c, i) => c.sig.length !== all[i]!.sig.length) &&
+    quiet.some((c) => quiet.every((o) => align(o, c)))
+  ) {
+    all = quiet;
+    newest = all[all.length - 1]!;
+  }
+  if (all.every((c) => c.sig.join() === newest.sig.join())) {
+    const base = richest(all);
+    return finish(base, base.workflow);
+  }
 
   // the recording that made every step any other one made (prefer the newest)
-  const base = [...all]
-    .reverse()
-    .find((c) => all.every((o) => embed(o.sig, c.sig)));
+  const bases = all.filter((c) => all.every((o) => align(o, c)));
+  const base = bases.length > 0 ? richest(bases) : undefined;
   if (!base) {
     const merged = mergePaths(all);
     if (merged) {
@@ -198,7 +657,7 @@ export function compileTraces(
     );
     return plain();
   }
-  const placed = all.map((c) => embed(c.sig, base.sig)!);
+  const placed = all.map((c) => align(c, base)!);
   const present = (k: number, i: number) => placed[k]!.includes(i);
   const always = base.sig.map((_, i) => all.every((_, k) => present(k, i)));
 
@@ -249,9 +708,23 @@ export function compileTraces(
       return m;
     };
     const groupIds = base.ids.slice(i, end + 1);
-    const rule = learnRule(yesK.map(before), noK.map(before));
+    const rule =
+      learnRule(yesK.map(before), noK.map(before)) ??
+      learnInputRule(
+        yesK.map((k) => all[k]!.trace.meta.inputs),
+        noK.map((k) => all[k]!.trace.meta.inputs),
+      );
     const condition =
       rule ?? askCondition(base, all, i, groupIds, yesK[0]!, noK[0]!, always);
+    if (!condition) {
+      // nothing has been read yet, so a question would have no data to judge
+      // from: the steps always run, and a wrong guess shows as drift
+      warnings.push(
+        `${groupIds.join(", ")} ran in only some recordings and nothing before them tells the recordings apart; they always run`,
+      );
+      i = end + 1;
+      continue;
+    }
     for (const id of groupIds) conditions.set(id, condition);
     i = end + 1;
   }
@@ -271,7 +744,7 @@ export function compileTraces(
 
 /** The step ids of `own` under the ids `base` uses (null: not the same steps). */
 function idMap(own: Compiled, base: Compiled): Map<string, string> | null {
-  const placed = embed(own.sig, base.sig);
+  const placed = align(own, base);
   if (!placed) return null;
   const map = new Map<string, string>();
   placed.forEach((baseIx, ownIx) =>
@@ -380,7 +853,7 @@ function askCondition(
   yesK: number,
   noK: number,
   always: boolean[],
-): Condition {
+): Condition | null {
   // the data a run has before the step: always-present read-only results
   const refs = base.ids
     .slice(0, start)
@@ -389,12 +862,13 @@ function askCondition(
       const field = base.recorded.has(`${id}.results`) ? "results" : "result";
       return { id, field, tool: base.sig[base.ids.indexOf(id)]! };
     });
+  if (refs.length === 0) return null;
   const prompt = refs
     .map((r) => `${r.id} ${r.tool} ${r.field}:\n{{steps.${r.id}.${r.field}}}`)
     .join("\n\n");
   const dataOf = (k: number) => {
     const c = all[k]!;
-    const placedK = embed(c.sig, base.sig)!;
+    const placedK = align(c, base)!;
     const ctx = {
       inputs: c.trace.meta.inputs,
       steps: {} as Record<string, Record<string, unknown>>,

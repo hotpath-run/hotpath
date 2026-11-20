@@ -1,3 +1,4 @@
+import { relaxedGuards } from "./guard-relax.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { Ajv } from "ajv";
@@ -33,6 +34,7 @@ import {
   missingRates,
   unseenUnits,
   projectRoot,
+  missingReferences,
   renderTemplate,
   scaledMaxChars,
   unwrapAnswer,
@@ -45,6 +47,7 @@ import {
   toolStepsOf,
   type ToolStep,
   type Workflow,
+  requestInputs,
   type WorkflowStep,
 } from "@hotpathrun/shared";
 
@@ -53,7 +56,9 @@ import {
   figureProblems,
   foreignAddresses,
   figuresPrompt,
+  latestItemFacts,
   selectionHints,
+  stepsRead,
   selectionMissing,
   todaysFigures,
 } from "./checks.js";
@@ -498,9 +503,38 @@ export async function runWorkflow(
   options: RunOptions,
 ): Promise<RunMetrics> {
   const missing = Object.entries(workflow.inputs).filter(
-    ([name]) => !(name in options.inputs),
+    ([name, def]) => def.required !== false && !(name in options.inputs),
   );
   if (missing.length > 0) {
+    // inputs the recordings never had (an email where only order ids were
+    // recorded) are a situation never seen: the agent does it, and the next
+    // compile learns that path. Only a forgotten input is a usage error.
+    const unknown = Object.keys(options.inputs).filter(
+      (name) => !(name in workflow.inputs),
+    );
+    if (unknown.length > 0) {
+      throw new DriftError(
+        "inputs",
+        `this run gives ${unknown.join(", ")}, which no recording had, and not ${missing.map(([n]) => n).join(", ")}`,
+        false,
+        {
+          durationMs: 0,
+          llmCalls: 0,
+          promptTokens: 0,
+          completionTokens: 0,
+          costUsd: 0,
+          fallback: false,
+          steps: [],
+          connectMs: 0,
+          toolMs: 0,
+          llmMs: 0,
+          rateLimitWaitMs: 0,
+          toolCalls: [],
+          driftStep: "inputs",
+          reason: "inputs never recorded",
+        },
+      );
+    }
     const listing = missing
       .map(
         ([name, def]) => `  ${name} (example: ${JSON.stringify(def.example)})`,
@@ -589,12 +623,29 @@ export async function runWorkflow(
     ...extra,
   });
 
+  // The arguments tool calls were made with this run: a value there (the city
+  // "Paris" a weather call asked for) is today's data, not a stale example fact.
+  const calledArgs: unknown[] = [];
+
+  // fields nothing reads may come back null (see guard-relax.ts)
+  const guards = relaxedGuards(workflow);
+
   // Runs one tool step; returns a drift reason, or null when its guard passes.
   const callTool = async (
     step: ToolStep,
     label: string,
   ): Promise<string | null> => {
+    // a value today's data lacks (item #2 on a one-item day) would be dropped
+    // from the call: never act, or read, with it silently missing
+    const missing = missingReferences(step.args, ctx, true);
+    if (missing.length > 0) {
+      return (
+        `${label}: ${step.tool} needs ${missing.map((m) => `{{${m}}}`).join(", ")}, ` +
+        "which today's data does not have"
+      );
+    }
     const args = renderTemplate(step.args, ctx) as Record<string, unknown>;
+    calledArgs.push(args);
     if (step.sideEffect && options.dryRun) {
       console.log(
         `dry-run: ${label} ${step.tool} would send ${JSON.stringify(args)}`,
@@ -672,7 +723,7 @@ export async function runWorkflow(
     if (isError) {
       return `${label}: tool ${step.tool} returned an error: ${previewOf(value)}`;
     }
-    const failure = checkToolGuard(step.guard, value);
+    const failure = checkToolGuard(guards.get(step.id) ?? step.guard, value);
     return failure && label !== step.id ? `${label}: ${failure}` : failure;
   };
 
@@ -766,7 +817,21 @@ export async function runWorkflow(
         // The example is from the recorded run: without the warning, small
         // models copy its facts instead of using this run's data.
         const dataPrompt = renderTemplate(step.prompt, ctx) as string;
-        const key = answerKey(step.example, dataPrompt);
+        // The customer's own words (a request this prompt does not show: a
+        // workflow compiled before prompts carried it). A saved answer was
+        // written for another request when it differs from the recorded one.
+        const request = requestInputs(ctx.inputs);
+        const changed = request.filter(
+          (n) =>
+            !step.prompt.includes(`inputs.${n}`) &&
+            ctx.inputs[n] !== workflow.inputs[n]?.example,
+        );
+        const key = answerKey(
+          step.example,
+          changed.length > 0
+            ? `${dataPrompt}\n${changed.map((n) => ctx.inputs[n]).join("\n")}`
+            : dataPrompt,
+        );
         const known = !reuse
           ? undefined
           : key === step.inputKey
@@ -782,7 +847,8 @@ export async function runWorkflow(
           checkLlmGuard(step.guard, known) === null &&
           (!fromRecording ||
             (checkGrounding(step.guard.grounding, ctx, known).length === 0 &&
-              checkStale(step.guard.exampleFacts, ctx, known).length === 0 &&
+              checkStale(step.guard.exampleFacts, ctx, known, calledArgs)
+                .length === 0 &&
               figureProblems(todaysFigures(step.calculations, ctx), ctx, known)
                 .missing.length === 0))
         ) {
@@ -807,6 +873,13 @@ export async function runWorkflow(
               "and work out the figures from it. " + SELECTIVE_NOTE,
             )
           : dataPrompt;
+        // After the example, so it is the last thing the model reads: the
+        // example's language and facts dominate a prompt that ends with them
+        const requestTail =
+          request.length > 0
+            ? `\n\nToday's request:\n${request.map((n) => String(ctx.inputs[n])).join("\n")}\n` +
+              "Reply in the language of today's request, not the example's, and answer what it asks."
+            : "";
         // What code works out from today's data: the items the recorded rule
         // selects, and the figures it calculated. The model writes around them.
         // a figure the recording calculated needs a rate this run never read
@@ -845,6 +918,7 @@ export async function runWorkflow(
         const hints = selectionHints(step.guard.grounding, ctx);
         const computed = [
           ...(hints.length > 0 ? [hints.join("\n")] : []),
+          ...latestItemFacts(stepsRead(step.prompt), ctx),
           ...(figures.length > 0 ? [figuresPrompt(figures)] : []),
         ];
         const withDerived =
@@ -866,7 +940,7 @@ export async function runWorkflow(
               ...figs.missing,
             ],
             stale: [
-              ...checkStale(step.guard.exampleFacts, ctx, t),
+              ...checkStale(step.guard.exampleFacts, ctx, t, calledArgs),
               ...figs.stale,
             ],
           };
@@ -877,18 +951,18 @@ export async function runWorkflow(
             `In it, each line like ${layout.rows[0]!.marker} stands for a list that is filled in from the data afterwards ` +
             `(${layout.rows.map((r) => `${r.marker}: ${r.over.split(".").slice(3).join(".") || "the items"}`).join("; ")}). ` +
             "Copy each of those lines exactly, once, on its own line, and do not write those lists yourself. " +
-            `Match the style and length of this example, roughly: ${layout.skeleton}\n\n` +
+            `Match the style and length of this example, roughly: ${layout.skeleton}${requestTail}\n\n` +
             REPLY_ONLY
           : `${withDerived}\n\n` +
             "Use only the data above. The example below comes from an earlier run on different data, so its facts must not be copied. " +
-            `Match the style and length of this example, roughly: ${step.example}\n\n` +
+            `Match the style and length of this example, roughly: ${step.example}${requestTail}\n\n` +
             REPLY_ONLY;
         // The retry goes without the example: shown it again, qwen3 1.7B
         // copied its facts on most retries (measured), even when the first
         // answer had only left something out. On a retry, facts beat style.
         const retryPrompt =
           `${withDerived}\n\n` +
-          `Use only the data above. Keep it to about ${lineCount(step.example)} lines. ${REPLY_ONLY}`;
+          `Use only the data above. Keep it to about ${lineCount(step.example)} lines.${requestTail} ${REPLY_ONLY}`;
         // A step with calculated figures is written by the stronger model (see `model: "strong"`).
         const writer = step.model === "strong" ? AGENT_MODEL : CHEAP_MODEL;
         if (writer !== CHEAP_MODEL) {
@@ -1322,6 +1396,8 @@ export function checkStale(
   facts: Array<string | number> | undefined,
   ctx: TemplateContext,
   text: string,
+  /** other values of this run's data: the arguments the tool calls were made with */
+  alsoPresent: unknown[] = [],
 ): string[] {
   if (!facts || facts.length === 0) return [];
   const current: Array<string | number> = [];
@@ -1338,6 +1414,7 @@ export function checkStale(
   };
   visit(ctx.inputs);
   visit(ctx.steps);
+  visit(alsoPresent);
   const stillThere = (fact: string | number) =>
     current.some((v) =>
       typeof v === "number"

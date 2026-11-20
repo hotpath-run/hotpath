@@ -223,3 +223,75 @@ export function foreignAddresses(
     .filter((a) => !known.includes(a.toLowerCase()));
   return [...new Set(found)];
 }
+
+// Field names that hold when an item happened. A list kept oldest first (a
+// parcel's tracking events) makes a small model report the first or a middle
+// item as "where it is now"; code can pick the newest, so it does.
+const TIME_FIELD =
+  /^(at|date|time|timestamp|datetime|\w+_at|\w+_date|\w+_time)$/i;
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}.*)?$/;
+
+const dateMs = (v: unknown): number | null =>
+  typeof v === "string" && ISO_DATE.test(v) && !Number.isNaN(Date.parse(v))
+    ? Date.parse(v)
+    : null;
+
+/**
+ * "The newest item of <list>" for every list of objects, in the results an AI
+ * step reads (`readsIds`), whose items all carry a date-like field. Lists
+ * without such a field, with one item, or with unparsable dates get nothing.
+ */
+export function latestItemFacts(
+  readsIds: string[],
+  ctx: TemplateContext,
+): string[] {
+  const out: string[] = [];
+  const visit = (node: unknown, at: string, depth: number) => {
+    if (Array.isArray(node)) {
+      if (
+        node.length >= 2 &&
+        node.every(
+          (i) => i !== null && typeof i === "object" && !Array.isArray(i),
+        )
+      ) {
+        const items = node as Item[];
+        const field = Object.keys(items[0]!).find(
+          (k) =>
+            TIME_FIELD.test(k) && items.every((i) => dateMs(i[k]) !== null),
+        );
+        if (field) {
+          // a tie goes to the later item: lists are written oldest first
+          const newest = items.reduce((best, i) =>
+            dateMs(i[field])! >= dateMs(best[field])! ? i : best,
+          );
+          out.push(
+            `The latest item of ${at.replace(/^steps\./, "")} (the newest by its "${field}", whatever its position) is: ${JSON.stringify(newest)}. ` +
+              "When you say what is the latest or current state, use this item.",
+          );
+        }
+      }
+      return;
+    }
+    if (node !== null && typeof node === "object" && depth < 4) {
+      for (const [k, v] of Object.entries(node))
+        visit(v, `${at}.${k}`, depth + 1);
+    }
+  };
+  for (const id of readsIds) {
+    const step = ctx.steps[id];
+    if (!step) continue;
+    for (const field of ["result", "results"] as const) {
+      visit(step[field], `steps.${id}.${field}`, 0);
+    }
+  }
+  return out;
+}
+
+/** Ids of the steps whose results an AI step's prompt template reads. */
+export function stepsRead(prompt: string): string[] {
+  return [
+    ...new Set(
+      [...prompt.matchAll(/\{\{steps\.([^.}]+)\./g)].map((m) => m[1]!),
+    ),
+  ];
+}

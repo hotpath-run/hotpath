@@ -182,6 +182,19 @@ const PROMPTS: Record<
     maxTurns: 12,
     nudge: false,
   },
+  // heavy and real: two live web pages per company, 8 companies a day
+  "lead-research": {
+    system: (date) =>
+      `You are a sales researcher. Today is ${date}. Call get_leads for today's date. Then, ` +
+      `one company at a time and in the order given, call fetch_page on its homepage and ` +
+      `then on its pricing page. When every company is done, call send_message once with ` +
+      `to="sales" and a markdown table with one row per company: company, what it sells ` +
+      `(one line), who it is for, free plan (yes/no), cheapest paid plan with its price ` +
+      `(or "not shown").`,
+    user: "Please research today's leads now and send the table.",
+    // 1 + 16 page reads + 1 send, one call per turn on most models
+    maxTurns: 24,
+  },
   "inbox-digest": {
     system: (date) =>
       `You are a personal assistant. Today is ${date}. Produce the inbox digest: call ` +

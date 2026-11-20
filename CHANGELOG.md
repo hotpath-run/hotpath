@@ -2,6 +2,17 @@
 
 All notable changes. Versions follow [semantic versioning](https://semver.org); before 1.0 a minor version may change behaviour, and the change is listed here.
 
+## 0.3.1
+
+Replays are more reliable and safer. Found by a new fuzzer (generated workflows replayed on changed data) and by a support-bot test with 100 customers.
+
+- **A step never runs with a missing value.** If today's data lacks something a step needs (item 2 on a day with one item, an empty field), the run stops before calling the tool instead of calling it with the value left out.
+- **Workflows learned from several recordings are right on all of them.** A message that differs between recordings is written at run time, not frozen to one recording's text; a list read item by item becomes a loop even when one day had a single item; an action some recordings made and others didn't becomes a condition; data checks are learned from every recorded result.
+- **Fewer needless fallbacks.** A field nothing in the workflow reads may be empty or change type; a field read only by a conditional step may be empty; values the run's own tool calls were made with count as today's data.
+- **Different inputs, different paths.** When recordings differ in which input they had (an order number or an email), the workflow branches on the input instead of asking the model before any data has arrived. Inputs not every recording had are optional.
+- **Replies fit the request.** The replay model sees the request (free-text inputs) after the recorded example and answers in the request's language; a saved answer is only reused for the same request. For lists with dates, the newest item is given as a fact.
+- **Rate limits:** when a provider's "too many requests" answer has no readable wait time, retries now cover a full minute instead of giving up after about 20 seconds.
+
 ## 0.3.0
 
 - **A free hotpath.run account is now required.** `hotpath login` (device flow: it shows a code and opens your browser), `hotpath logout` and `hotpath whoami`. Every other command asks you to sign in first; `--help`, `--version` and the internal `demo-tools` do not. For CI, set `HOTPATH_TOKEN`. The sign-in is kept in your settings folder (`%APPDATA%\hotpath` on Windows, `~/.config/hotpath` elsewhere), checked online at most once a day, and works offline for up to 7 days.

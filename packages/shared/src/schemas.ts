@@ -283,6 +283,8 @@ export type WorkflowStep = z.infer<typeof workflowStepSchema>;
 export const workflowInputSchema = z.object({
   type: z.string(),
   example: z.unknown(),
+  /** false: only some recordings had it (a customer gives an id or an email); a run may leave it out */
+  required: z.boolean().optional(),
 });
 export type WorkflowInput = z.infer<typeof workflowInputSchema>;
 

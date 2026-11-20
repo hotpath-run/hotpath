@@ -72,6 +72,35 @@ export function learnRule(
   return null;
 }
 
+/**
+ * learnRule for the items of one list. A yes/no field (flag, done, urgent) is
+ * a rule from one item on each side: it has two values, so a coincidence is
+ * unlikely, unlike an id or a title that differs on every item.
+ */
+export function learnItemRule(
+  yes: Array<Map<string, Feature>>,
+  no: Array<Map<string, Feature>>,
+): Condition | null {
+  const rule = learnRule(yes, no);
+  if (rule || yes.length === 0 || no.length === 0) return rule;
+  const refs = [...yes[0]!.keys()].filter((r) =>
+    [...yes, ...no].every((f) => f.has(r)),
+  );
+  const bool = (f: Feature | undefined, v: boolean) =>
+    f !== undefined && "scalar" in f && f.scalar === v;
+  for (const ref of refs) {
+    for (const v of [true, false]) {
+      if (
+        yes.every((f) => bool(f.get(ref), v)) &&
+        no.every((f) => bool(f.get(ref), !v))
+      ) {
+        return { kind: "equals", ref, value: v };
+      }
+    }
+  }
+  return null;
+}
+
 // Field names that hold a small fixed set of values ("urgent", "spam"). For
 // these one recording per path is enough to trust "field is X"; for any other
 // field one example proves nothing (a subject or an id differs every time).
@@ -102,6 +131,49 @@ export function learnPathRule(
     if (ys.every((f) => val(f) === y0) && ns.every((f) => val(f) !== y0)) {
       return { kind: "equals", ref, value: y0 };
     }
+  }
+  return null;
+}
+
+const filled = (v: unknown): boolean =>
+  v !== undefined &&
+  v !== null &&
+  v !== "" &&
+  !(Array.isArray(v) && v.length === 0);
+
+/** Input names that some recordings had (non-empty) and others did not. */
+export function varyingInputs(
+  inputs: Array<Record<string, unknown>>,
+): string[] {
+  const names = new Set(inputs.flatMap((i) => Object.keys(i)));
+  return [...names].filter((n) => {
+    const has = inputs.map((i) => filled(i[n]));
+    return has.some(Boolean) && !has.every(Boolean);
+  });
+}
+
+/** Which of `names` a run's inputs give (non-empty). */
+export const givenInputs = (
+  inputs: Record<string, unknown>,
+  names: string[],
+): string[] => names.filter((n) => filled(inputs[n]));
+
+/**
+ * A rule on the run's own inputs: an input every `yes` run gave and no `no`
+ * run did ("a customer gives an order id or an email"). It needs no data from
+ * earlier steps, so it works for the very first step of a workflow.
+ */
+export function learnInputRule(
+  yes: Array<Record<string, unknown>>,
+  no: Array<Record<string, unknown>>,
+): Condition | null {
+  if (yes.length === 0 || no.length === 0) return null;
+  for (const name of varyingInputs([...yes, ...no])) {
+    const ref = `inputs.${name}`;
+    if (yes.every((i) => filled(i[name])) && no.every((i) => !filled(i[name])))
+      return { kind: "nonEmpty", ref };
+    if (yes.every((i) => !filled(i[name])) && no.every((i) => filled(i[name])))
+      return { kind: "empty", ref };
   }
   return null;
 }

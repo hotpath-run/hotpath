@@ -50,6 +50,36 @@ function renderString(text: string, ctx: TemplateContext): unknown {
   });
 }
 
+/**
+ * References in `value` that resolve to nothing in `ctx`. Rendering would
+ * drop such an argument or write "undefined" into a text, so a step with any
+ * should not run: today's data lacks what the recording had.
+ */
+export function missingReferences(
+  value: unknown,
+  ctx: TemplateContext,
+  /** a null counts as missing too (a tool argument must be a value, not null) */
+  nullToo = false,
+): string[] {
+  if (typeof value === "string") {
+    return [...value.matchAll(TEMPLATE_RE)]
+      .map((m) => m[1]!.trim())
+      .filter((expr) => {
+        const v = lookup(expr, ctx);
+        return v === undefined || (nullToo && v === null);
+      });
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((v) => missingReferences(v, ctx, nullToo));
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.values(value).flatMap((v) =>
+      missingReferences(v, ctx, nullToo),
+    );
+  }
+  return [];
+}
+
 /** Resolve one reference such as `steps.s1.result.emails.0.subject` (no braces). */
 export function lookupReference(expr: string, ctx: TemplateContext): unknown {
   return lookup(expr, ctx);
@@ -95,3 +125,18 @@ function child(value: unknown, key: string): unknown {
   }
   return undefined;
 }
+
+/**
+ * The inputs that are a person's own words (a customer's message), not an id
+ * or a date: text with spaces. A text written for them must answer them, in
+ * their language, so the AI step is shown these.
+ */
+export function requestInputs(inputs: Record<string, unknown>): string[] {
+  return Object.entries(inputs)
+    .filter(([, v]) => typeof v === "string" && /\s/.test(v.trim()))
+    .map(([k]) => k);
+}
+
+/** What the model is told about the request: the example is style only. */
+export const REQUEST_RULE =
+  "The example shows format and level of detail only. Write in the language of the request and answer what it asks.";

@@ -30,7 +30,7 @@ const keyOf = (s: WorkflowStep | CaseStep): string =>
       : s.type;
 
 /** Rename the steps of one case (`s5` → `s5b1`) so ids stay unique in the workflow. */
-function renameIds(steps: CaseStep[], suffix: string): CaseStep[] {
+export function renameIds(steps: CaseStep[], suffix: string): CaseStep[] {
   const own = new Set(
     steps.flatMap((s) => [
       s.id,
@@ -177,4 +177,27 @@ export function mergePaths(
       `b1 has ${cases.length} paths: ${cases.map((c) => describePath(c.steps)).join(" | ")}`,
     ],
   };
+}
+
+/**
+ * What `renameIds` did to a case's step ids, applied to the recorded results of
+ * those steps (the later passes look results up by step id).
+ */
+export function renameRecorded(
+  recorded: Array<{ id: string; field: "result" | "results"; result: unknown }>,
+  steps: CaseStep[],
+  suffix: string,
+) {
+  const own = new Set(
+    steps.flatMap((s) => [
+      s.id,
+      ...(s.type === "foreach" ? s.body.map((b) => b.id) : []),
+    ]),
+  );
+  const base = (id: string) => id.split(".")[0]!;
+  return recorded.map((r) =>
+    own.has(r.id) || own.has(base(r.id))
+      ? { ...r, id: `${base(r.id)}${suffix}${r.id.slice(base(r.id).length)}` }
+      : r,
+  );
 }

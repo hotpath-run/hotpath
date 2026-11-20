@@ -179,9 +179,20 @@ describe("retryDelayMs", () => {
   it("prefers retry-after-ms, then retry-after seconds, then backoff", () => {
     expect(retryDelayMs({ "retry-after-ms": "180" }, 0)).toBe(180);
     expect(retryDelayMs({ "retry-after": "2" }, 0)).toBe(2000);
-    expect(retryDelayMs({}, 0)).toBe(500);
-    expect(retryDelayMs({}, 2)).toBe(2000);
-    expect(retryDelayMs(undefined, 10)).toBe(8000); // capped
+    expect(retryDelayMs({}, 0)).toBe(1000);
+    expect(retryDelayMs({}, 2)).toBe(4000);
+    expect(retryDelayMs(undefined, 10)).toBe(30_000); // capped
+  });
+
+  it("with no hint, the retries together outlast a one-minute window", () => {
+    // Gemini's free tier (5 requests a minute) sends its "retry in 58s" in a
+    // body the SDK cannot read, so the backoff alone must cover the minute
+    let total = 0;
+    for (let attempt = 0; attempt < 6; attempt++) {
+      total += retryDelayMs({}, attempt);
+    }
+    expect(total).toBeGreaterThanOrEqual(60_000);
+    expect(retryDelayMs({}, 5)).toBeLessThanOrEqual(MAX_RETRY_WAIT_MS);
   });
 });
 

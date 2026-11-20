@@ -55,6 +55,10 @@
     "inbox-sweep": {
       "agent": "pnpm --filter demo-agent start --",
       "server": "node examples/demo-tools/dist/triage.js"
+    },
+    "lead-research": {
+      "agent": "pnpm --filter demo-agent start --",
+      "server": "node examples/demo-tools/dist/research.js"
     }
   }
 }

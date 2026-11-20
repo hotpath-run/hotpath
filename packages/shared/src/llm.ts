@@ -265,7 +265,9 @@ export function retryDelayMs(headers: HeaderBag, attempt: number): number {
     const date = Date.parse(after);
     if (!Number.isNaN(date)) return Math.max(0, date - Date.now());
   }
-  return Math.min(8000, 500 * 2 ** attempt);
+  // 1+2+4+8+16+30 s: six retries outlast a per-minute window even when the
+  // provider gives no readable hint (Gemini's free tier puts it in the body)
+  return Math.min(30_000, 1000 * 2 ** attempt);
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

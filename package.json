@@ -1,6 +1,6 @@
 {
   "name": "hotpath",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Record your AI agent once. Replay it faster and cheaper, with AI only where judgment is needed.",
   "license": "Apache-2.0",
   "repository": {
@@ -31,7 +31,8 @@
     "bench:guard-audit": "tsx bench/src/guard-audit.ts",
     "bench:measure": "pnpm --filter demo-tools build && tsx bench/src/measure.ts",
     "bench:branching": "pnpm --filter demo-tools build && tsx bench/src/branching.ts",
-    "bench:replay": "pnpm --filter demo-tools build && tsx bench/src/replay-tokens.ts"
+    "bench:replay": "pnpm --filter demo-tools build && tsx bench/src/replay-tokens.ts",
+    "fuzz": "pnpm --filter bench exec vitest run --config vitest.fuzz.config.ts"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",

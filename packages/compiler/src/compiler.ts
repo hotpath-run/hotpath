@@ -5,6 +5,8 @@ import {
   mentions,
   normalizeText,
   renderTemplate,
+  REQUEST_RULE,
+  requestInputs,
   type Condition,
   type DroppedCall,
   type GroundingEntry,
@@ -12,7 +14,7 @@ import {
   type Workflow,
   type WorkflowStep,
 } from "@hotpathrun/shared";
-import { features, learnRule, type Feature } from "./rules.js";
+import { features, learnItemRule, type Feature } from "./rules.js";
 
 import { collapsePages } from "./pages.js";
 import { relaxPositional, withSelectionRules } from "./grounding.js";
@@ -49,10 +51,84 @@ export interface RecordedResult {
   result: unknown;
 }
 
+/**
+ * What other recordings of the task taught: facts one recording alone cannot
+ * show. compileTraces compares recordings, then compiles each again with this.
+ */
+export interface CompileHints {
+  /** `tool\0argument`: written by the model although short (it differed between recordings) */
+  textArgs?: ReadonlySet<string>;
+  /** tools another recording called once per item: a run of 1 call is a loop too */
+  loopTools?: ReadonlySet<string>;
+  /** tool → the rule on a list item that picked the items it acted on, learned from all recordings together */
+  itemRules?: ReadonlyMap<string, Condition>;
+  /** filled while compiling: per tool, the items of the lists it acted on (yes) or passed over (no) */
+  samples?: Map<string, ItemSamples>;
+  /** filled while compiling: the list a looping tool goes through (read again to see what a run that skipped the tool had) */
+  sources?: Map<string, ListSource>;
+}
+
+export interface ListSource {
+  /** the tool whose result holds the list */
+  tool: string;
+  path: string[];
+  as: string;
+}
+
+export interface ItemSamples {
+  yes: Array<Map<string, Feature>>;
+  no: Array<Map<string, Feature>>;
+}
+
+/** Whether a learned item rule gives the verdict a recording shows (rules from `learnItemRule`). */
+function ruleHolds(
+  rule: Condition,
+  yes: Array<Map<string, Feature>>,
+  no: Array<Map<string, Feature>>,
+): boolean {
+  if (rule.kind !== "equals" && rule.kind !== "notEquals") return false;
+  const test = (m: Map<string, Feature>) => {
+    const f = m.get(rule.ref);
+    if (!f || !("scalar" in f)) return null;
+    return rule.kind === "equals"
+      ? f.scalar === rule.value
+      : f.scalar !== rule.value;
+  };
+  return (
+    yes.every((m) => test(m) === true) && no.every((m) => test(m) === false)
+  );
+}
+
+/** The items of `items` as feature maps, split by whether the tool acted on them. */
+function sampleItems(
+  items: unknown[],
+  as: string,
+  acted: ReadonlySet<number>,
+): ItemSamples {
+  const out: ItemSamples = { yes: [], no: [] };
+  items.forEach((item, ix) => {
+    const map = new Map<string, Feature>();
+    features(item, as, map);
+    (acted.has(ix) ? out.yes : out.no).push(map);
+  });
+  return out;
+}
+
+function addSamples(hints: CompileHints, tool: string, got: ItemSamples): void {
+  if (!hints.samples) return;
+  const have = hints.samples.get(tool) ?? { yes: [], no: [] };
+  have.yes.push(...got.yes);
+  have.no.push(...got.no);
+  hints.samples.set(tool, have);
+}
+
+export const textArgKey = (tool: string, arg: string) => `${tool}\0${arg}`;
+
 /** compileTrace, plus each step's recorded result (branch learning compares them). */
 export function compileTraceDetailed(
   trace: TraceFile,
   compiledFrom: string,
+  hints: CompileHints = {},
 ): { workflow: Workflow; recorded: RecordedResult[] } {
   const steps: WorkflowStep[] = [];
   // earlier steps' recorded results, for data-flow matching (rule 3)
@@ -95,11 +171,21 @@ export function compileTraceDetailed(
 
   for (let index = 0; index < kept.length;) {
     // rule 9: the same tool called once per item of an earlier list → foreach
-    const loop = detectLoop(kept, index, earlier);
+    const loop = detectLoop(kept, index, earlier, hints);
     if (loop) {
       const loopId = newId();
       const calls = kept.slice(index, index + loop.count);
       const first = calls[0]!;
+      const listTool = readOnlyResults.find(
+        (r) => r.id === loop.source.id,
+      )?.tool;
+      if (listTool) {
+        hints.sources?.set(first.tool, {
+          tool: listTool,
+          path: loop.source.path,
+          as: loop.as,
+        });
+      }
       const args: Record<string, unknown> = {};
       for (const [key, value] of Object.entries(first.args)) {
         const itemPath = loop.itemArgs.get(key);
@@ -155,7 +241,13 @@ export function compileTraceDetailed(
         continue;
       }
 
-      if (typeof value === "string" && isLlmWrittenText(value)) {
+      // a value that differs between recordings is never a constant, however short
+      if (
+        typeof value === "string" &&
+        (isLlmWrittenText(value) ||
+          hints.textArgs?.has(textArgKey(call.tool, key)) ||
+          quotesData(value, sideEffect, readOnlyResults))
+      ) {
         // rule 4: generated text → insert an llm step just before this one
         const llmId = newId();
         const prompt = buildPrompt(
@@ -164,6 +256,7 @@ export function compileTraceDetailed(
           key,
           call.tool,
           constantSiblings(call.args, key),
+          requestInputs(trace.meta.inputs),
         );
         // rule 10: lines that are one row per item of a list are written by
         // code at run time; the model writes the rest
@@ -223,6 +316,19 @@ export function compileTraceDetailed(
       });
   }
 
+  // a recording that never called a tool others loop with: every item of its
+  // list was passed over, which is what tells the items that are acted on apart
+  for (const [tool, src] of hints.sources ?? []) {
+    if (kept.some((c) => c.tool === tool)) continue;
+    const list = walk(
+      readOnlyResults.find((r) => r.tool === src.tool)?.result,
+      src.path,
+    );
+    if (Array.isArray(list)) {
+      addSamples(hints, tool, sampleItems(list, src.as, new Set()));
+    }
+  }
+
   const workflow: Workflow = {
     version: 1,
     task: trace.meta.task,
@@ -252,21 +358,43 @@ interface LoopMatch {
   when?: Condition;
 }
 
-/** Every array inside `node` (length ≥ 2), with its path. */
+/** Every array inside `node` (length ≥ `min`, 2 unless a loop is known), with its path. */
 function arraysIn(
   node: unknown,
   path: string[] = [],
+  min = 2,
 ): Array<{ path: string[]; items: unknown[] }> {
   const found: Array<{ path: string[]; items: unknown[] }> = [];
   if (Array.isArray(node)) {
-    if (node.length >= 2) found.push({ path, items: node });
-    node.forEach((v, i) => found.push(...arraysIn(v, [...path, String(i)])));
+    if (node.length >= min) found.push({ path, items: node });
+    node.forEach((v, i) =>
+      found.push(...arraysIn(v, [...path, String(i)], min)),
+    );
   } else if (node !== null && typeof node === "object") {
     for (const [k, v] of Object.entries(node)) {
-      found.push(...arraysIn(v, [...path, k]));
+      found.push(...arraysIn(v, [...path, k], min));
     }
   }
   return found;
+}
+
+/**
+ * The arguments that change from call to call. A run of one call shows no
+ * change; when another recording proved the tool is called per item, the
+ * arguments that equal a field of the item are the ones that vary.
+ */
+function varyingArgs(
+  window: TraceFile["calls"],
+  items: unknown[] | null,
+): string[] {
+  if (window.length === 1 && items) {
+    return Object.keys(window[0]!.args).filter((k) =>
+      items.some((item) => pathsOf(item, window[0]!.args[k]).length > 0),
+    );
+  }
+  return Object.keys(window[0]!.args).filter((k) =>
+    window.some((c) => !deepEqual(c.args[k], window[0]!.args[k])),
+  );
 }
 
 /** All paths in `node` whose value equals `value`. */
@@ -320,16 +448,18 @@ function detectLoop(
   calls: TraceFile["calls"],
   index: number,
   earlier: Earlier[],
+  hints: CompileHints,
 ): LoopMatch | null {
   const tool = calls[index]!.tool;
+  const known = hints.loopTools?.has(tool) === true;
   let runEnd = index;
   while (runEnd < calls.length && calls[runEnd]!.tool === tool) runEnd++;
   const runLength = runEnd - index;
-  if (runLength < 2) return null;
+  if (runLength < (known ? 1 : 2)) return null;
 
   for (const source of earlier) {
     if (source.field !== "result") continue;
-    for (const list of arraysIn(source.result)) {
+    for (const list of arraysIn(source.result, [], known ? 1 : 2)) {
       const n = list.items.length;
       if (n > runLength) continue;
       const window = calls.slice(index, index + n);
@@ -337,9 +467,7 @@ function detectLoop(
       if (window.some((c) => Object.keys(c.args).sort().join("\0") !== keys)) {
         continue;
       }
-      const varying = Object.keys(window[0]!.args).filter((k) =>
-        window.some((c) => !deepEqual(c.args[k], window[0]!.args[k])),
-      );
+      const varying = varyingArgs(window, known ? list.items : null);
       if (varying.length === 0) continue;
       const itemArgs = new Map<string, string[]>();
       for (const key of varying) {
@@ -353,15 +481,22 @@ function detectLoop(
         itemArgs.set(key, path);
       }
       if (itemArgs.size !== varying.length) continue;
+      const as = loopVariable(list.path);
+      // every item was acted on here; another recording that skipped some
+      // items says which ones, and that rule holds for this one too
+      const got = sampleItems(list.items, as, new Set(list.items.keys()));
+      addSamples(hints, tool, got);
+      const rule = hints.itemRules?.get(tool);
       return {
         count: n,
         source: { id: source.id, path: list.path },
-        as: loopVariable(list.path),
+        as,
         itemArgs,
+        ...(rule && ruleHolds(rule, got.yes, got.no) ? { when: rule } : {}),
       };
     }
   }
-  return detectItemSubsetLoop(calls, index, runLength, earlier);
+  return detectItemSubsetLoop(calls, index, runLength, earlier, hints);
 }
 
 /**
@@ -375,19 +510,26 @@ function detectItemSubsetLoop(
   index: number,
   runLength: number,
   earlier: Earlier[],
+  hints: CompileHints,
 ): LoopMatch | null {
+  const known = hints.loopTools?.has(calls[index]!.tool) === true;
   const window = calls.slice(index, index + runLength);
   const keys = Object.keys(window[0]!.args).sort().join(" ");
   if (window.some((c) => Object.keys(c.args).sort().join(" ") !== keys)) {
     return null;
   }
-  const varying = Object.keys(window[0]!.args).filter((k) =>
-    window.some((c) => !deepEqual(c.args[k], window[0]!.args[k])),
+  const sourceLists = (source: Earlier) =>
+    source.field === "result" ? arraysIn(source.result, [], known ? 1 : 2) : [];
+  const varying = varyingArgs(
+    window,
+    known
+      ? earlier.flatMap((e) => sourceLists(e)).flatMap((l) => l.items)
+      : null,
   );
   if (varying.length === 0) return null;
   for (const source of earlier) {
     if (source.field !== "result") continue;
-    for (const list of arraysIn(source.result)) {
+    for (const list of sourceLists(source)) {
       const items = list.items;
       if (items.length <= runLength) continue; // covering every item: the plain loop
       // the item field the first varying argument comes from, and which items
@@ -425,14 +567,13 @@ function detectItemSubsetLoop(
         if (itemArgs.size !== varying.length) continue;
         const as = loopVariable(list.path);
         const acted = new Set(chosen);
-        const yes: Array<Map<string, Feature>> = [];
-        const no: Array<Map<string, Feature>> = [];
-        items.forEach((item, ix) => {
-          const map = new Map<string, Feature>();
-          features(item, as, map);
-          (acted.has(ix) ? yes : no).push(map);
-        });
-        const when = learnRule(yes, no);
+        const { yes, no } = sampleItems(items, as, acted);
+        addSamples(hints, calls[index]!.tool, { yes, no });
+        const pooled = hints.itemRules?.get(calls[index]!.tool);
+        const when =
+          pooled && ruleHolds(pooled, yes, no)
+            ? pooled
+            : learnItemRule(yes, no);
         if (!when) continue;
         return {
           count: runLength,
@@ -471,7 +612,16 @@ export function inferCommonSchema(values: unknown[]): Record<string, unknown> {
     };
   }
   const types = new Set(values.map((v) => (v === null ? "null" : typeof v)));
-  return types.size === 1 ? { type: [...types][0] } : {};
+  if (types.size === 1) return { type: [...types][0] };
+  // a value that is sometimes null (a parcel not delivered yet): both types
+  // are allowed, not "must be null" because one sample happened to be
+  if (types.size === 2 && types.has("null")) {
+    const other = [...types].find((t) => t !== "null")!;
+    if (other === "string" || other === "number" || other === "boolean") {
+      return { type: [other, "null"] };
+    }
+  }
+  return {};
 }
 
 // rule 8 (grounding): which values from earlier read-only results does the
@@ -744,6 +894,27 @@ function isLlmWrittenText(value: string): boolean {
   return value.length >= LLM_TEXT_MIN_CHARS || value.includes("\n");
 }
 
+/**
+ * What an action sends is written text, even when short, if it quotes a long
+ * value of what was just read ("New today: Q3 budget review"): the same words
+ * tomorrow would be wrong. Short values ("spam", "urgent") label a path, not
+ * the day's data, so they do not count.
+ */
+const QUOTE_MIN_CHARS = 12;
+function quotesData(
+  value: string,
+  sideEffect: boolean,
+  results: Array<{ id: string; result: unknown; field?: "result" | "results" }>,
+): boolean {
+  return (
+    sideEffect &&
+    /\s/.test(value.trim()) &&
+    mentionedValues(value, results).some(
+      (e) => typeof e.value === "string" && e.value.length >= QUOTE_MIN_CHARS,
+    )
+  );
+}
+
 /** The template context a replay of the recorded run builds. */
 function recordedContext(trace: TraceFile, earlier: Earlier[]) {
   const steps: Record<string, { result?: unknown; results?: unknown[] }> = {};
@@ -760,15 +931,21 @@ function buildPrompt(
   argName: string,
   tool: string,
   siblings: string,
+  request: string[] = [],
 ): string {
   const parts = [`You are compiling the task "${task}".`];
+  // the person's own words: the text must answer them, in their language
+  for (const name of request) {
+    parts.push(`the request (inputs.${name}):
+{{inputs.${name}}}`);
+  }
   // Templates, not recorded data: the runtime fills them with each run's results.
   for (const { id, tool: toolName, field } of readOnlyResults) {
     const label = field === "results" ? `results (one per item)` : "result";
     parts.push(`${id} ${toolName} ${label}:\n{{steps.${id}.${field}}}`);
   }
   parts.push(
-    `write the \`${argName}\` for \`${tool}\`${siblings}. Use only the data above and cover every item in it.`,
+    `write the \`${argName}\` for \`${tool}\`${siblings}. Use only the data above and cover every item in it.${request.length > 0 ? ` ${REQUEST_RULE}` : ""}`,
   );
   return parts.join("\n\n");
 }
