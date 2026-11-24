@@ -117,10 +117,15 @@ async function agentRun(
   return recording.finish();
 }
 
-async function compileAndSave(task: string): Promise<Workflow> {
+// what `hotpath compile <task> --yes` does: compile, save, and confirm the recording
+async function compileAndSave(
+  task: string,
+  confirmed = true,
+): Promise<Workflow> {
   const { workflow } = await compileTaskInMemory(task);
-  await saveWorkflow(workflow);
-  return workflow;
+  const saved = { ...workflow, confirmed };
+  await saveWorkflow(saved);
+  return saved;
 }
 
 let logSpy: ReturnType<typeof vi.spyOn>;
@@ -266,6 +271,21 @@ describe("runWorkflow", () => {
     // the model was given today's orders, not the recorded ones
     const prompt = chatMock.mock.calls[0]![0].messages[0]!.content as string;
     expect(prompt).toContain("Maison Colibri");
+  });
+
+  it("refuses to act on a recording nobody confirmed, and says how to confirm", async () => {
+    const task = newTask();
+    const data = { "2026-10-01": DAY1, "2026-10-02": DAY2 };
+    await agentRun(task, "2026-10-01", makeTools(data).tools, DAY1);
+    await compileAndSave(task, false);
+    const replay = makeTools(data);
+    await expect(
+      runWorkflow(task, {
+        tools: replay.tools,
+        inputs: { date: "2026-10-02" },
+      }),
+    ).rejects.toThrow(/hotpath confirm/);
+    expect(replay.sent).toEqual([]);
   });
 
   it("a dry run reads but does not act", async () => {

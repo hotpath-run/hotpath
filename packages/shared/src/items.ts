@@ -50,3 +50,37 @@ export function mergePages(acc: unknown, page: unknown, next: string): unknown {
 function isRecord(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === "object" && !Array.isArray(v);
 }
+
+function atPath(value: unknown, path: string[]): unknown {
+  let v = value;
+  for (const p of path) {
+    v =
+      v !== null && typeof v === "object"
+        ? (v as Record<string, unknown>)[p]
+        : undefined;
+  }
+  return v;
+}
+
+/**
+ * Each item's own looked-up data from a loop over the same list: results[i],
+ * or, for a loop that ran once per distinct value at `distinct`, the result
+ * for the item's value (results follow the order values first appear).
+ */
+export function detailsPerItem(
+  items: unknown[],
+  results: unknown,
+  distinct?: string[],
+): unknown[] {
+  if (!Array.isArray(results)) return items.map(() => undefined);
+  if (!distinct)
+    return results.length === items.length
+      ? results
+      : items.map(() => undefined);
+  const firsts: string[] = [];
+  return items.map((item) => {
+    const value = JSON.stringify(atPath(item, distinct));
+    if (!firsts.includes(value)) firsts.push(value);
+    return results[firsts.indexOf(value)];
+  });
+}

@@ -24,7 +24,9 @@
     "test": "vitest run --passWithNoTests"
   },
   "devDependencies": {
-    "vitest": "^2.1.8"
+    "@modelcontextprotocol/sdk": "^1.31.0",
+    "vitest": "^2.1.8",
+    "zod": "^3.24.1"
   },
   "dependencies": {
     "@hotpathrun/compiler": "workspace:*",

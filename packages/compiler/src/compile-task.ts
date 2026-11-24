@@ -59,6 +59,8 @@ export async function latestTraceFile(task: string): Promise<string> {
 export interface CompileOptions {
   /** paths to require for every item (`--require`); a path that does not fit is an error */
   require?: string[];
+  /** the task only reads (`--read-only`): a recording with no action is accepted */
+  readOnly?: boolean;
 }
 
 export interface CompileResult {
@@ -84,6 +86,22 @@ export async function compileTaskInMemory(
       `trace task is "${trace.meta.task}" but you asked to compile "${task}" — check --trace`,
     );
   }
+  // an agent that stopped before anything worked (its model refused, it
+  // crashed) leaves a recording with nothing to replay: a workflow from it
+  // would do nothing and count as a successful run
+  if (!trace.calls.some((c) => !c.isError)) {
+    throw new Error(
+      `the recording of "${task}" (${path.basename(resolved)}) has no tool call that worked: ` +
+        "the agent stopped before doing the task (check its output for the error). " +
+        "Nothing was compiled; fix the cause and record it again.",
+    );
+  }
+  const saved = await previousSaved(task);
+  const readOnly = options.readOnly === true || saved.readOnly;
+  if (!readOnly) {
+    const problem = halfDoneRecording(trace);
+    if (problem) throw new HalfDoneRecordingError(task, resolved, problem);
+  }
   const relative = path.relative(repoRoot, resolved).replace(/\\/g, "/");
   // --trace means that recording alone; otherwise recent ones teach branches
   const earlier = traceFile ? [] : await earlierTraces(task, resolved);
@@ -91,7 +109,7 @@ export async function compileTaskInMemory(
   const others = branched.used.length - 1;
   // requirements the user gave before stay through a recompile; one typed now
   // must fit, one carried over may not (the steps may have changed)
-  const carried = (await previousRequirements(task)).filter(
+  const carried = saved.require.filter(
     (r) => !(options.require ?? []).includes(r),
   );
   const typed = applyRequirements(
@@ -123,6 +141,9 @@ export async function compileTaskInMemory(
         ? `${relative} (+${others} earlier recording${others === 1 ? "" : "s"})`
         : relative,
     baseline: await agentBaseline(trace),
+    // a fresh recording is unconfirmed until the user says it is right
+    confirmed: false,
+    ...(readOnly ? { readOnly: true } : {}),
   });
   return {
     workflow,
@@ -138,24 +159,31 @@ export async function compileTaskInMemory(
       ...typed.applied,
       ...required.applied,
       ...strongNotes(workflow),
+      ...decisionNotes(workflow),
     ],
   };
 }
 
 /** `require` of the workflow already on disk (none, or unreadable: nothing). */
-async function previousRequirements(task: string): Promise<string[]> {
+/** What the owner chose for the saved workflow (--require, --read-only): kept by a recompile. */
+async function previousSaved(
+  task: string,
+): Promise<{ require: string[]; readOnly: boolean }> {
   try {
     const raw = JSON.parse(
       await readFile(
         path.join(workflowsDir, `${assertTaskName(task)}.json`),
         "utf8",
       ),
-    ) as { require?: unknown };
-    return Array.isArray(raw.require)
-      ? raw.require.filter((r): r is string => typeof r === "string")
-      : [];
+    ) as { require?: unknown; readOnly?: unknown };
+    return {
+      require: Array.isArray(raw.require)
+        ? raw.require.filter((r): r is string => typeof r === "string")
+        : [],
+      readOnly: raw.readOnly === true,
+    };
   } catch {
-    return [];
+    return { require: [], readOnly: false };
   }
 }
 
@@ -442,10 +470,11 @@ export function recordingWarnings(
     );
   }
   warnings.push(...hedgeWarnings(workflow));
+  warnings.push(...positionalWarnings(workflow));
   const actionTools = trace.meta.tools
     .filter((t) => t.annotations?.readOnlyHint !== true)
     .map((t) => t.name);
-  if (actionTools.length === 0) return warnings;
+  if (actionTools.length === 0 || workflow.readOnly) return warnings;
   const acted = toolStepsOf(workflow.steps).some((s) => s.sideEffect);
   if (acted) return [...warnings, ...coverageProblems(workflow, recorded)];
   warnings.push(
@@ -455,6 +484,42 @@ export function recordingWarnings(
       "before relying on it.",
   );
   return warnings;
+}
+
+/**
+ * Actions on items picked by position that rule 12 could not turn into a loop:
+ * the runtime refuses to replay them, so the owner should know why every run
+ * goes to the agent.
+ */
+export function positionalWarnings(workflow: Workflow): string[] {
+  return (workflow.positional ?? []).map(
+    (p) =>
+      `${p.steps.join(", ")} act on items of ${p.list} by position (item 1, item 2…). ` +
+      "A new day's list has other items in those places, so this workflow is never replayed: " +
+      "the agent does the task each time. Record it again with the agent acting on the items " +
+      "one after another, in the list's order.",
+  );
+}
+
+/** What the replay model decides per item, and from how many recorded examples. */
+export function decisionNotes(workflow: Workflow): string[] {
+  return workflow.steps.flatMap((s) => {
+    if (s.type !== "foreach" || !s.decide) return [];
+    const counts = new Map<string, number>();
+    for (const e of s.decide.examples) {
+      const a = String(e.choice.action);
+      counts.set(a, (counts.get(a) ?? 0) + 1);
+    }
+    const seen = [...counts].map(([a, n]) => `${a} ×${n}`).join(", ");
+    const once = [...counts].filter(([, n]) => n === 1).map(([a]) => a);
+    return [
+      `${s.id}: what to do with each ${s.as} is decided by the replay model on each run, ` +
+        `from the recorded decisions (${seen}); code checks its answer before any action runs.` +
+        (once.length > 0
+          ? ` ${once.join(", ")} was recorded once: record another day where it happens to make the rule clearer.`
+          : ""),
+    ];
+  });
 }
 
 // Phrases where the agent says it could not or did not do something.
@@ -545,8 +610,21 @@ export function formatWorkflow(workflow: Workflow): string {
         toolLine(step, indent);
       } else if (step.type === "foreach") {
         lines.push(
-          `${indent}${step.id} foreach ${step.as} in ${step.over} (max ${step.maxItems})${only(step.when)}`,
+          `${indent}${step.id} foreach ${step.as} in ${step.over} (max ${step.maxItems}${step.distinct ? `, once per distinct ${step.distinct.join(".")}` : ""})${only(step.when)}`,
         );
+        if (step.decide) {
+          const choices = step.decide.actions
+            .map((a) => {
+              const fields = Object.keys(a.fields);
+              return fields.length > 0
+                ? `${a.tool}(${fields.join(", ")})`
+                : a.tool;
+            })
+            .join(" | ");
+          lines.push(
+            `${indent}  decide per ${step.as} (llm ${step.decide.model}, ${step.decide.examples.length} recorded examples): ${choices} | none`,
+          );
+        }
         for (const body of step.body) toolLine(body, `${indent}  `);
       } else if (step.type === "branch") {
         lines.push(`${indent}${step.id} branch${only(step.when)}`);
@@ -601,4 +679,136 @@ function findOutputConsumer(
 function formatValue(value: unknown): string {
   if (typeof value === "string") return value;
   return JSON.stringify(value);
+}
+
+export class UnconfirmedWorkflowError extends Error {
+  constructor(readonly task: string) {
+    super(
+      `workflow "${task}" has not been confirmed — check what it recorded with ` +
+        `"hotpath show ${task}", then run "hotpath confirm ${task}" ` +
+        `(or recompile with "hotpath compile ${task} --yes")`,
+    );
+    this.name = "UnconfirmedWorkflowError";
+  }
+}
+
+/** Workflows compiled before the check existed have no flag: confirmed. */
+export function isConfirmed(workflow: Workflow): boolean {
+  return workflow.confirmed !== false;
+}
+
+export function assertConfirmed(workflow: Workflow): void {
+  if (!isConfirmed(workflow)) throw new UnconfirmedWorkflowError(workflow.task);
+}
+
+/** `hotpath confirm <task>`: mark the saved workflow as checked by the user. */
+export async function confirmWorkflow(task: string): Promise<Workflow> {
+  const workflow = { ...(await loadWorkflow(task)), confirmed: true };
+  await saveWorkflow(workflow);
+  return workflow;
+}
+
+const MAX_ARG_CHARS = 300;
+
+const clip = (text: string) =>
+  text.length > MAX_ARG_CHARS ? `${text.slice(0, MAX_ARG_CHARS)}…` : text;
+
+/**
+ * What the recorded run did, for the "is this right?" question: side-effect
+ * calls (⚡, e.g. a message sent) with every argument, reads with one line.
+ */
+export function formatRecordingSummary(workflow: Workflow): string {
+  // branch paths hold steps too: every recorded path is something it may do
+  const flat = workflow.steps.flatMap((s) =>
+    s.type === "branch"
+      ? [...s.cases.flatMap((c) => c.steps), ...(s.else ?? [])]
+      : [s],
+  );
+  const tools = flat.flatMap((s) =>
+    s.type === "foreach" ? s.body : s.type === "tool" ? [s] : [],
+  );
+  const actions = tools.filter((t) => t.sideEffect);
+  const reads = tools.filter((t) => !t.sideEffect);
+  const lines = ["the recorded run did:"];
+  // per-item decisions are where a weak recording goes wrong: show each one
+  for (const s of flat) {
+    if (s.type !== "foreach" || !s.decide) continue;
+    lines.push(`  decided per item (${s.decide.examples.length} recorded):`);
+    for (const ex of s.decide.examples.slice(0, 12)) {
+      const name = s.decide.key.reduce<unknown>(
+        (v, k) => (v as Record<string, unknown> | undefined)?.[k],
+        ex.item,
+      );
+      const { action, ...fields } = ex.choice;
+      const extra = Object.keys(fields).length
+        ? ` ${clip(JSON.stringify(fields))}`
+        : "";
+      lines.push(`    ${formatValue(name)} → ${formatValue(action)}${extra}`);
+    }
+    if (s.decide.examples.length > 12)
+      lines.push(`    … and ${s.decide.examples.length - 12} more`);
+  }
+  for (const t of actions) {
+    lines.push(`  ⚡ ${t.tool}`);
+    for (const [k, v] of Object.entries(t.args)) {
+      lines.push(
+        `      ${k}: ${clip(typeof v === "string" ? v : JSON.stringify(v))}`,
+      );
+    }
+  }
+  if (actions.length === 0) lines.push("  (no side-effect calls)");
+  if (reads.length > 0) {
+    lines.push(`  reads: ${reads.map((t) => t.tool).join(", ")}`);
+  }
+  const llm = workflow.steps.filter((s) => s.type === "llm").length;
+  if (llm > 0) lines.push(`  ${llm} step(s) written by a model at run time`);
+  return lines.join("\n");
+}
+
+export class HalfDoneRecordingError extends Error {
+  constructor(
+    readonly task: string,
+    readonly traceFile: string,
+    readonly problem: string,
+  ) {
+    super(
+      `the recording of "${task}" (${path.basename(traceFile)}) looks half done: ${problem}. ` +
+        "Nothing was compiled. If the agent stopped early (an error, a timeout, a model that " +
+        "answered in text instead of acting), fix the cause and record it again. If this task " +
+        `only reads, compile it with: hotpath compile ${task} --read-only`,
+    );
+    this.name = "HalfDoneRecordingError";
+  }
+}
+
+/**
+ * The agent read its data and stopped before its first action: the server offers
+ * action tools but no call to one worked. A workflow from it would only read, and
+ * every replay would "succeed" doing nothing. Null when the run acted, or the
+ * server has nothing to act with.
+ */
+export function halfDoneRecording(trace: TraceFile): string | null {
+  const actionTools = trace.meta.tools
+    .filter((t) => t.annotations?.readOnlyHint !== true)
+    .map((t) => t.name);
+  if (actionTools.length === 0) return null;
+  const acted = trace.calls.some(
+    (c) => !c.isError && actionTools.includes(c.tool),
+  );
+  if (acted) return null;
+  const counts = new Map<string, number>();
+  for (const c of trace.calls)
+    counts.set(c.tool, (counts.get(c.tool) ?? 0) + 1);
+  const made = [...counts]
+    .map(([tool, n]) => (n > 1 ? `${tool} ×${n}` : tool))
+    .join(", ");
+  const last = trace.calls.at(-1);
+  const ending =
+    last?.isError === true
+      ? `; its last call (${last.tool}) failed: ${clip(JSON.stringify(last.result)).slice(0, 160)}`
+      : "";
+  return (
+    `it made ${trace.calls.length} call${trace.calls.length === 1 ? "" : "s"} (${made}) and never ` +
+    `called an action tool (${actionTools.join(", ")})${ending}`
+  );
 }

@@ -179,7 +179,7 @@ async function triage(): Promise<Result[]> {
       });
     }
   }
-  const compiled = await hotpath(["compile", task], "triage-urgent");
+  const compiled = await hotpath(["compile", task, "--yes"], "triage-urgent");
   for (const line of compiled.output.split("\n")) {
     if (/^[⚠+] /.test(line) || line.includes("branch"))
       console.log(`[${task}] compile: ${line}`);
@@ -256,7 +256,7 @@ async function sweep(): Promise<Result[]> {
   if (rec.code !== 0)
     throw new Error(`[${task}] agent run failed:\n${rec.output}`);
   console.log(`[${task}] recorded sweep-a`);
-  const compiled = await hotpath(["compile", task], "sweep-a");
+  const compiled = await hotpath(["compile", task, "--yes"], "sweep-a");
   if (compiled.code !== 0)
     throw new Error(`[${task}] compile failed:\n${compiled.output}`);
   const shown = await hotpath(["show", task], "sweep-a");

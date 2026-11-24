@@ -140,6 +140,14 @@ function scanCondition(
     scanText(when.prompt, uses, aliases, true);
     return;
   }
+  if (when.kind === "all") {
+    for (const c of when.of) scanCondition(c, uses, aliases);
+    return;
+  }
+  if (when.kind === "before" || when.kind === "after") {
+    scanText(when.other, uses, aliases, false);
+    scanAlias(when.other, uses, aliases);
+  }
   // "is it empty" looks at the value itself, not at what its items hold
   const emptiness = when.kind === "nonEmpty" || when.kind === "empty";
   const target = emptiness ? resolveList(when.ref, aliases) : null;

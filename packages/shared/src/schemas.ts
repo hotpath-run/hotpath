@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { calculationSchema } from "./calc.js";
 import { selectionSchema } from "./selection.js";
+import { tableNodeSchema } from "./table.js";
 import { taskNameProblem } from "./task-name.js";
 
 /** A task name is used as a file name: one that names a path is refused. */
@@ -116,7 +117,7 @@ export type StepGuard = z.infer<typeof stepGuardSchema>;
  * when no simple rule does, a yes/no question for the replay model.
  * `ref` is a template reference without braces (`steps.s1.result.emails`).
  */
-export const conditionSchema = z.discriminatedUnion("kind", [
+const ruleConditions = [
   z.object({ kind: z.literal("nonEmpty"), ref: z.string() }),
   z.object({ kind: z.literal("empty"), ref: z.string() }),
   z.object({
@@ -128,6 +129,26 @@ export const conditionSchema = z.discriminatedUnion("kind", [
     kind: z.literal("notEquals"),
     ref: z.string(),
     value: z.union([z.string(), z.number(), z.boolean(), z.null()]),
+  }),
+  /** the number at `ref` is greater than `value` (page if the error rate is above 2) */
+  z.object({ kind: z.literal("above"), ref: z.string(), value: z.number() }),
+  /** the number at `ref` is less than `value` (reorder if stock is below 10) */
+  z.object({ kind: z.literal("below"), ref: z.string(), value: z.number() }),
+  /** the date at `ref` is earlier than the one at `other` (due before today's date input) */
+  z.object({ kind: z.literal("before"), ref: z.string(), other: z.string() }),
+  /** the date at `ref` is later than the one at `other` */
+  z.object({ kind: z.literal("after"), ref: z.string(), other: z.string() }),
+] as const;
+export const ruleConditionSchema = z.discriminatedUnion("kind", [
+  ...ruleConditions,
+]);
+
+export const conditionSchema = z.discriminatedUnion("kind", [
+  ...ruleConditions,
+  /** every one of these rules holds (overdue and over 10,000) */
+  z.object({
+    kind: z.literal("all"),
+    of: z.array(ruleConditionSchema).min(2),
   }),
   z.object({
     kind: z.literal("ask"),
@@ -195,6 +216,17 @@ export const llmStepSchema = z.object({
    */
   calculations: z.array(calculationSchema).optional(),
   /**
+   * Lists left out of the prompt (each replaced by a note): code computes
+   * every figure the recorded text took from them, so the model is not sent
+   * the items (a day of log lines). Learned from the recording (see trim.ts).
+   */
+  trim: z.array(z.string()).optional(),
+  /**
+   * Length of the data part of the prompt on the recorded run (after `trim`).
+   * A run sending far more is warned about: it costs that much more.
+   */
+  inputChars: z.number().int().nonnegative().optional(),
+  /**
    * The example with its list rows taken out (`skeleton`, one marker line per
    * list) and how one row is written (`rows`). At run time code writes the
    * rows from the data and the model writes only the rest.
@@ -219,6 +251,78 @@ export const llmStepSchema = z.object({
 export type LlmStep = z.infer<typeof llmStepSchema>;
 
 /**
+ * What the agent did to each item depended on the item (a tier from the company's
+ * size, a refund or a forward by the ticket's category). Before any action runs,
+ * the replay model decides for every item at once which recorded action to take
+ * (or none) and the values that action needs, shown the run's data and the
+ * recorded decisions; code checks the answer (one per item, in order, known
+ * actions, right types). Inside the body `{{choice.action}}` and
+ * `{{choice.<field>}}` are the current item's decision.
+ */
+export const itemDecisionSchema = z.object({
+  model: z.string(),
+  /** the run's data as templates, like an llm step's prompt */
+  prompt: z.string(),
+  /** the path in an item that names it (["id"]) */
+  key: z.array(z.string()),
+  /**
+   * An earlier loop over the same list that looked each item up (its company,
+   * its stock): shown next to the item, so the model never pairs lists itself.
+   * With `distinct`, that loop ran once per distinct value at this path.
+   */
+  details: z
+    .object({ step: z.string(), distinct: z.array(z.string()).optional() })
+    .optional(),
+  actions: z
+    .array(
+      z.object({
+        tool: z.string(),
+        /** values the decision must give for this action, by type */
+        fields: z.record(z.string(), z.enum(["string", "number"])),
+      }),
+    )
+    .min(1),
+  /**
+   * The recorded choices follow one number of the item or its details in bands
+   * (a tier from the company's employee count): code decides every item whose
+   * number falls in a band, the model only the rest (see bands.ts).
+   */
+  bands: z
+    .object({
+      from: z.enum(["item", "details"]),
+      path: z.array(z.string()).min(1),
+      action: z.string(),
+      field: z.string(),
+      bands: z
+        .array(
+          z.object({
+            value: z.string(),
+            gte: z.number().optional(),
+            lte: z.number().optional(),
+            lt: z.number().optional(),
+          }),
+        )
+        .min(2),
+    })
+    .optional(),
+  /**
+   * The recorded choices follow a small rulebook over the item or its details
+   * (category, then priority or an amount threshold): code decides by it (see table.ts).
+   */
+  table: tableNodeSchema.optional(),
+  /** the recorded items with what was done to them (action "none": nothing) */
+  examples: z.array(
+    z.object({
+      item: z.unknown(),
+      /** the item's own looked-up data (its company, its ticket), when there was a lookup per item */
+      details: z.unknown().optional(),
+      choice: z.record(z.string(), z.unknown()),
+    }),
+  ),
+});
+export type ItemDecision = z.infer<typeof itemDecisionSchema>;
+
+/**
  * Runs `body` once per item of the list `over` resolves to. Inside the body,
  * `{{<as>.<path>}}` is the current item; afterwards `{{steps.<id>.results}}`
  * is the list of per-item results.
@@ -234,6 +338,12 @@ export const foreachStepSchema = z.object({
   body: z.array(toolStepSchema).min(1),
   maxItems: z.number().int().positive(),
   when: conditionSchema.optional(),
+  decide: itemDecisionSchema.optional(),
+  /**
+   * Run the body once per distinct value at this path in the item (the agent
+   * checked stock once per product, not once per order); repeats are skipped.
+   */
+  distinct: z.array(z.string()).min(1).optional(),
 });
 export type ForeachStep = z.infer<typeof foreachStepSchema>;
 
@@ -319,8 +429,27 @@ export const workflowSchema = z.object({
    * fallback applies them again.
    */
   require: z.array(z.string()).optional(),
+  /**
+   * Actions on items of a list picked by position (item 0, item 1…) that could
+   * not be compiled into a loop. A new day's list has other items in other
+   * places, so these are never replayed: the agent runs instead.
+   */
+  positional: z
+    .array(z.object({ list: z.string(), steps: z.array(z.string()).min(2) }))
+    .optional(),
   /** failed/retried calls from the trace that did not become steps */
   droppedCalls: z.array(droppedCallSchema).optional(),
+  /**
+   * Has the user confirmed what the recording did (hotpath compile prompt,
+   * --yes or hotpath confirm)? Absent means a workflow compiled before this
+   * check existed: treated as confirmed so current users are not broken.
+   */
+  confirmed: z.boolean().optional(),
+  /**
+   * The owner said this task only reads (`compile --read-only`): a recording with
+   * no action is then the job, not an agent that stopped early. Kept by recompiles.
+   */
+  readOnly: z.boolean().optional(),
   /** what the recorded agent run took: the reference for "saved" estimates */
   baseline: z
     .object({

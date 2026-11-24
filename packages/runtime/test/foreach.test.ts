@@ -130,18 +130,34 @@ describe("foreach at run time", () => {
     ]);
   }, 30_000);
 
-  it("stops at maxItems with a warning", async () => {
-    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+  // Was "runs the first maxItems with a warning": a list cut short reported
+  // success with items left undone (the hard bench's 117th invoice was never
+  // flagged). Now a list longer than maxItems goes to the agent before any call.
+  it("stops before any call when the list is longer than maxItems", async () => {
+    const err = await withFixtures("default", () =>
+      runWorkflow(inboxWorkflow(getEmail, {}, 2), { inputs: {} }).catch(
+        (e: unknown) => e,
+      ),
+    );
+    expect(err).toBeInstanceOf(DriftError);
+    expect((err as DriftError).reason).toMatch(
+      /items to act on, more than maxItems \(2\)/,
+    );
+    expect((err as DriftError).sideEffectRan).toBe(false);
+  }, 30_000);
+
+  it("looks at every item when rules pick the few it acts on", async () => {
+    // a rule no email matches: nothing to act on, however long the list
+    const none: ToolStep = {
+      ...getEmail,
+      when: { kind: "equals", ref: "email.id", value: "no-such-email" },
+    };
     const metrics = await withFixtures("default", () =>
-      runWorkflow(inboxWorkflow(getEmail, {}, 2), { inputs: {} }),
+      runWorkflow(inboxWorkflow(none, {}, 1), { inputs: {} }),
     );
     expect(
       metrics.toolCalls.filter((c) => c.tool === "get_email"),
-    ).toHaveLength(2);
-    expect(log.mock.calls.flat().join("\n")).toContain(
-      "running the first 2 (maxItems)",
-    );
-    log.mockRestore();
+    ).toHaveLength(0);
   }, 30_000);
 
   it("a guard failing in any iteration is drift for the run", async () => {

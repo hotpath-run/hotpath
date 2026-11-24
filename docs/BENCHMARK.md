@@ -1261,3 +1261,18 @@ called). Prices from the project table (Haiku $0.10 / $0.50 per 1M).
 **30 of 30 correct, 0 false fallbacks, about $0.016 in all** (36,562 in / 24,818 out tokens). Every weekly-report text
 names issue 315 by its title under mobile-app (the misplaced bare numbers were qwen3:1.7b's). Ten runs per task: a
 confirmation, not a rate.
+
+## Opus 5.5 morning brief, real cost per run (2026-11-21)
+
+Run: `hotpath demo` plus replays on new days, `HOTPATH_REUSE=0`, fresh home (`out/opus-home`). Task `morning-brief`,
+synthetic demo data. Agent (recording) and replay on Claude Opus 5.5; a second line replays on Haiku 5.5.
+Costs = the CLI's token counts at list prices (Opus $4/$20 per 1M in/out; Haiku $0.10/$0.50).
+
+- Opus 5.5 agent, 3 recordings: $0.0358, $0.0372, $0.0382 (mean $0.0371), 3 model calls each.
+- Opus 5.5 replay, 6 runs (1 demo + 5 new days 2026-10-05..09): $0.0151 demo; $0.0138 to $0.0194 on new days (mean $0.0176), 1 model call each.
+- Haiku 5.5 replay, 5 new days: $0.0006 to $0.0008 (mean $0.00068), 1 model call each.
+- All 14 replays passed the workflow's check; 0 fallbacks.
+
+Ratios from these means: Opus agent / Opus replay about 2.1x; Opus agent / Haiku replay about 55x. Small sample: one
+task, one workflow, 3 recordings. Raw summary: `company/gtm/social/RESULTS-opus-morning-brief-2026-11-21.md` (in the
+hotpath repo).

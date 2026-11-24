@@ -5,6 +5,7 @@ import type { Calculation, TemplateContext } from "@hotpathrun/shared";
 import {
   figureProblems,
   foreignAddresses,
+  inputGrowth,
   todaysFigures,
 } from "../src/checks.js";
 
@@ -113,6 +114,16 @@ describe("foreignAddresses (security finding 5)", () => {
     ).toEqual([]);
   });
 
+  it("ends a link at full-width punctuation (a free model's Chinese bracket after it)", () => {
+    expect(
+      foreignAddresses(
+        "见 https://docs.corp.com/v2）— 和 https://evil.example/x。",
+        data,
+        example,
+      ),
+    ).toEqual(["https://evil.example/x"]);
+  });
+
   it("flags a link or address nobody gave", () => {
     expect(
       foreignAddresses(
@@ -121,5 +132,40 @@ describe("foreignAddresses (security finding 5)", () => {
         example,
       ),
     ).toEqual(["https://evil.example/c?q=-428", "ops@evil.example"]);
+  });
+});
+
+describe("the cost guard's warning (A.8)", () => {
+  it("warns only when today's data is far bigger than the recording's", () => {
+    expect(inputGrowth("s4", 4500, 1500)).toBeNull(); // 3× but only 3,000 more
+    expect(inputGrowth("s4", 20000, 10000)).toBeNull(); // 2×
+    expect(inputGrowth("s4", 30000, undefined)).toBeNull(); // compiled before A.8
+    expect(inputGrowth("s4", 52300, 16800)).toMatch(
+      /^⚠ s4: today's data for the model is 52,300 characters, 3\.1× the recording's 16,800/,
+    );
+  });
+});
+
+describe("a top figure must name its item", () => {
+  it("is missing when the text states the number but not the name", () => {
+    const top = [
+      {
+        text: "NA top customer: Stark (5100)",
+        value: 5100,
+        name: "Stark",
+        calc: count,
+      },
+    ];
+    expect(figureProblems(top, ctx, "NA: Wayne with 5100").missing).toEqual([
+      "Stark",
+    ]);
+    expect(figureProblems(top, ctx, "NA: stark with 5,100").missing).toEqual(
+      [],
+    );
+    // "none (0)": any wording of nothing will do
+    const none = [
+      { text: "auth: none (0)", value: 0, name: "none", calc: count },
+    ];
+    expect(figureProblems(none, ctx, "auth had 0 errors").missing).toEqual([]);
   });
 });

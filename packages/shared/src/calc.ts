@@ -37,10 +37,25 @@ export const timeShiftSchema = z.union([
 ]);
 export type TimeShift = z.infer<typeof timeShiftSchema>;
 
+/** Only the items whose (string) field equals, or does not equal, a value: paid orders. */
+export const calcFilterSchema = z.object({
+  field: z.string(),
+  equals: z.string().optional(),
+  not: z.string().optional(),
+  /** the item's date is earlier than the one at this reference (overdue: before inputs.date) */
+  before: z.string().optional(),
+  after: z.string().optional(),
+});
+export type CalcFilter = z.infer<typeof calcFilterSchema>;
+
 export const calculationSchema = z.object({
   /** the recorded line with the figure as <calculated> */
   line: z.string(),
-  op: z.enum(["count", "sum", "avg", "each", "time"]),
+  /**
+   * `top`: the item value (`by`) whose summed `field` is largest, and that sum;
+   * with `match` over text lines, the most frequent message after the word, and how often
+   */
+  op: z.enum(["count", "sum", "avg", "each", "time", "top"]),
   /** the items: a whole list, or the selected ones */
   list: z.string(),
   selection: selectionSchema.optional(),
@@ -58,6 +73,28 @@ export const calculationSchema = z.object({
   units: z.object({ field: z.string(), seen: z.array(z.string()) }).optional(),
   /** the figure in the recorded text, for the stale check (`time`: how many items it timed) */
   recorded: z.number(),
+  where: calcFilterSchema.optional(),
+  /** `count` over a list of text lines: the lines holding this word (ERROR) */
+  match: z.string().optional(),
+  /** `top`: the item field the sums are grouped by (customer) */
+  by: z.string().optional(),
+  /**
+   * One figure per item of `list` (a loop's results, one per region): over that
+   * item's `path` list, named by its `name` field. `list` may also end in
+   * `.*.<path>` elsewhere: every item's list, put together (a total).
+   */
+  group: z
+    .object({
+      name: z.string(),
+      path: z.string(),
+      /** the groups are these steps' results (one call per service), not a loop's */
+      refs: z.array(z.string()).min(2).optional(),
+    })
+    .optional(),
+  /** one figure per value of this item field (per vendor), over the items `where` keeps */
+  per: z.string().optional(),
+  /** decimals the recorded figure was written with (money: 2), so today's is written alike */
+  decimals: z.number().int().min(1).max(6).optional(),
 });
 export type Calculation = z.infer<typeof calculationSchema>;
 
@@ -122,6 +159,8 @@ export interface Figure {
   value: number;
   /** `time` figures: the clock time "HH:MM" the text must state */
   time?: string;
+  /** `top` figures: the item or message the text must name */
+  name?: string;
 }
 
 const OFFSET = /^([+-])(\d{2}):?(\d{2})$/;
@@ -230,6 +269,16 @@ export function computeFigures(
   calc: Calculation,
   ctx: TemplateContext,
 ): Figure[] | null {
+  if (
+    calc.group ||
+    calc.per ||
+    calc.where ||
+    calc.match ||
+    calc.op === "top" ||
+    calc.list.includes(".*.")
+  ) {
+    return computeExtended(calc, ctx);
+  }
   const items = calc.selection
     ? selectedItems(calc.selection, ctx)
     : (() => {
@@ -381,4 +430,199 @@ export function missingRates(
     }
   }
   return [...missing];
+}
+
+/** `steps.s2.results.*.orders`: every result's orders, put together; a plain reference otherwise. */
+export function listAt(ref: string, ctx: TemplateContext): unknown[] | null {
+  const star = ref.indexOf(".*.");
+  if (star < 0) {
+    const node = lookupReference(ref, ctx);
+    return Array.isArray(node) ? node : null;
+  }
+  const outer = lookupReference(ref.slice(0, star), ctx);
+  if (!Array.isArray(outer)) return null;
+  const rest = ref.slice(star + 3).split(".");
+  const out: unknown[] = [];
+  for (const o of outer) {
+    let v: unknown = o;
+    for (const k of rest) v = isItem(v) ? v[k] : undefined;
+    if (!Array.isArray(v)) return null;
+    out.push(...v);
+  }
+  return out;
+}
+
+const ISO = /^\d{4}-\d{2}-\d{2}/;
+
+export function passes(
+  item: unknown,
+  where: CalcFilter | undefined,
+  ctx?: TemplateContext,
+): boolean {
+  if (!where) return true;
+  if (!isItem(item)) return false;
+  const v = item[where.field];
+  if (where.equals !== undefined) return v === where.equals;
+  if (where.not !== undefined) return v !== where.not;
+  const ref = where.before ?? where.after;
+  if (ref !== undefined) {
+    const other = ctx ? lookupReference(ref, ctx) : undefined;
+    if (typeof v !== "string" || typeof other !== "string") return false;
+    if (!ISO.test(v) || !ISO.test(other)) return false;
+    const [a, b] = [v.slice(0, 10), other.slice(0, 10)];
+    return where.before !== undefined ? a < b : a > b;
+  }
+  return true;
+}
+
+// match words are learned as capital words only (ERROR, WARN): no escaping needed
+const wordIn = (line: string, word: string) =>
+  /^[A-Z]+$/.test(word) &&
+  new RegExp(`(?<![A-Za-z])${word}(?![A-Za-z])`).test(line);
+
+/** No line holds the word today: said as such, so a report still has its row. */
+const NO_LINES = { name: "none", value: 0 } as const;
+
+/** The text after the word, past a "<source>:" tag when there is one. */
+export function messageAfter(line: string, word: string): string | null {
+  if (!wordIn(line, word)) return null;
+  const at = line.search(new RegExp(`(?<![A-Za-z])${word}(?![A-Za-z])`));
+  const rest = line.slice(at + word.length);
+  const colon = rest.indexOf(": ");
+  const msg = (colon >= 0 ? rest.slice(colon + 2) : rest).trim();
+  return msg.length > 0 ? msg : null;
+}
+
+/** How a per-group top figure is labelled: "NA top customer", "auth most frequent ERROR message". */
+export function topLabel(
+  calc: Pick<Calculation, "op" | "by" | "match">,
+): string {
+  if (calc.op !== "top") return "";
+  return calc.match
+    ? ` most frequent ${calc.match} message`
+    : ` top ${calc.by}`;
+}
+
+/** One figure over items: a count (of matching lines), a sum, an average, or the top item. */
+export function figureOver(
+  calc: Pick<Calculation, "op" | "field" | "where" | "match" | "by">,
+  items: unknown[],
+  ctx?: TemplateContext,
+): { value: number; name?: string } | null {
+  const kept = items.filter((it) => passes(it, calc.where, ctx));
+  if (calc.op === "count") {
+    if (calc.match) {
+      if (!kept.every((l) => typeof l === "string")) return null;
+      return {
+        value: kept.filter((l) => wordIn(l as string, calc.match!)).length,
+      };
+    }
+    return { value: kept.length };
+  }
+  if (calc.op === "top" && calc.match) {
+    // the most frequent message among the lines holding the word ("ERROR
+    // payments: invalid token signature" → "invalid token signature")
+    if (!kept.every((l) => typeof l === "string")) return null;
+    const counts = new Map<string, number>();
+    for (const l of kept as string[]) {
+      const m = messageAfter(l, calc.match);
+      if (m) counts.set(m, (counts.get(m) ?? 0) + 1);
+    }
+    // a stable sort: on a tie, the message seen first
+    const best = [...counts].sort((a, b) => b[1] - a[1])[0];
+    return best ? { name: best[0], value: best[1] } : NO_LINES;
+  }
+  if (!calc.field || !kept.every(isItem)) return null;
+  const values: number[] = [];
+  for (const it of kept as Item[]) {
+    const v = it[calc.field];
+    if (typeof v !== "number" || !Number.isFinite(v)) return null;
+    values.push(v);
+  }
+  if (calc.op === "sum")
+    return { value: round2(values.reduce((a, b) => a + b, 0)) };
+  if (calc.op === "avg")
+    return {
+      value: values.length
+        ? round2(values.reduce((a, b) => a + b, 0) / values.length)
+        : 0,
+    };
+  if (calc.op === "top") {
+    if (!calc.by) return null;
+    const sums = new Map<string, number>();
+    (kept as Item[]).forEach((it, i) => {
+      const k = it[calc.by!];
+      if (typeof k === "string") sums.set(k, (sums.get(k) ?? 0) + values[i]!);
+    });
+    const best = [...sums].sort((a, b) => b[1] - a[1])[0];
+    return best ? { name: best[0], value: round2(best[1]) } : null;
+  }
+  return null;
+}
+
+/** Filtered, counted-by-word, top and per-group figures (see calculationSchema). */
+function computeExtended(
+  calc: Calculation,
+  ctx: TemplateContext,
+): Figure[] | null {
+  // 17774.5 handed over as "17774.5" was copied as is into a money report
+  // written with cents everywhere else: keep the recording's decimals
+  const fmt = (x: number) =>
+    calc.decimals ? round2(x).toFixed(calc.decimals) : formatFigure(x);
+  const describe = (got: { value: number; name?: string }) =>
+    calc.op === "top" ? `${got.name} (${fmt(got.value)})` : fmt(got.value);
+  if (calc.group) {
+    const groups = calc.group.refs
+      ? calc.group.refs.map((r) => lookupReference(r, ctx))
+      : listAt(calc.list, ctx);
+    if (groups === null) return null;
+    const out: Figure[] = [];
+    for (const g of groups) {
+      if (!isItem(g)) return null;
+      const name = g[calc.group.name];
+      const items = g[calc.group.path];
+      if (typeof name !== "string" || !Array.isArray(items)) return null;
+      const got = figureOver(calc, items, ctx);
+      if (got === null) return null;
+      out.push({
+        text: `${name}${topLabel(calc)}: ${describe(got)}`,
+        value: got.value,
+        ...(got.name !== undefined ? { name: got.name } : {}),
+      });
+    }
+    return out;
+  }
+  const items = listAt(calc.list, ctx);
+  if (items === null) return null;
+  if (calc.per) {
+    // one figure per value of the field among the items the filter keeps, in the
+    // order they first appear (a vendor with no overdue invoice has no line)
+    const kept = items.filter((it) => passes(it, calc.where, ctx));
+    const groups = new Map<string, unknown[]>();
+    for (const it of kept) {
+      const name = isItem(it) ? it[calc.per] : undefined;
+      if (typeof name !== "string") return null;
+      groups.set(name, [...(groups.get(name) ?? []), it]);
+    }
+    const out: Figure[] = [];
+    for (const [name, group] of groups) {
+      const got = figureOver({ ...calc, where: undefined }, group, ctx);
+      if (got === null) return null;
+      out.push({
+        text: `${name}${topLabel(calc)}: ${describe(got)}`,
+        value: got.value,
+        ...(got.name !== undefined ? { name: got.name } : {}),
+      });
+    }
+    return out;
+  }
+  const got = figureOver(calc, items, ctx);
+  if (got === null) return null;
+  return [
+    {
+      text: calc.line.replace("<calculated>", describe(got)),
+      value: got.value,
+      ...(got.name !== undefined ? { name: got.name } : {}),
+    },
+  ];
 }

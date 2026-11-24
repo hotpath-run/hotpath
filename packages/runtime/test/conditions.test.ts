@@ -77,6 +77,31 @@ describe("checkCondition", () => {
     ).toBe(true);
   });
 
+  it("above and below compare a number; anything else does not run the step", () => {
+    const m: TemplateContext = {
+      inputs: {},
+      steps: { s1: { result: { rate: 3.1, calm: 0.4, text: "3.1" } } },
+    };
+    const above = (ref: string) =>
+      checkCondition({ kind: "above", ref, value: 2 }, m);
+    expect(above("steps.s1.result.rate")).toBe(true);
+    expect(above("steps.s1.result.calm")).toBe(false);
+    expect(above("steps.s1.result.text")).toBe(false);
+    expect(above("steps.s1.result.missing")).toBe(false);
+    expect(
+      checkCondition(
+        { kind: "below", ref: "steps.s1.result.calm", value: 2 },
+        m,
+      ),
+    ).toBe(true);
+    expect(
+      checkCondition(
+        { kind: "above", ref: "steps.s1.result.rate", value: 3.1 },
+        m,
+      ),
+    ).toBe(false);
+  });
+
   it("equals and notEquals compare the value", () => {
     expect(
       checkCondition(

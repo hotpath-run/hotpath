@@ -98,6 +98,10 @@ function conditionShape(when: Condition): unknown {
   if (when.kind === "ask") {
     return { kind: "ask", reads: when.prompt.match(TEMPLATE_RE) ?? [] };
   }
+  if (when.kind === "all")
+    return { kind: "all", of: when.of.map(conditionShape) };
+  if (when.kind === "before" || when.kind === "after")
+    return { kind: when.kind, ref: when.ref, other: when.other };
   return "value" in when
     ? { kind: when.kind, ref: when.ref, value: redact(when.value) }
     : { kind: when.kind, ref: when.ref };

@@ -1,5 +1,6 @@
 import {
   countItems,
+  numbersInText,
   renderTemplate,
   type BranchStep,
   type CaseStep,
@@ -26,12 +27,14 @@ import {
   givenInputs,
   learnInputRule,
   learnItemRule,
+  learnItemThresholdRule,
+  learnNumberRule,
   learnRule,
   varyingInputs,
   type Feature,
 } from "./rules.js";
 
-export { learnRule };
+export { learnItemThresholdRule, learnNumberRule, learnRule };
 
 // Branch learning (several recordings of one task → one workflow). A single
 // recording is one path; when another recording skipped some steps (no new
@@ -680,6 +683,24 @@ function compileUsed(
     return map;
   });
 
+  // numbers the agents wrote ("above the 2% threshold") and every number the
+  // tools returned: a threshold is a written number that no data holds
+  const written = all.flatMap((c) =>
+    c.trace.calls.flatMap((call) =>
+      Object.values(call.args)
+        .filter((v): v is string => typeof v === "string")
+        .flatMap((v) => numbersInText(v)),
+    ),
+  );
+  const dataValues = new Set<number>();
+  const collect = (v: unknown): void => {
+    if (typeof v === "number") dataValues.add(v);
+    else if (Array.isArray(v)) v.forEach(collect);
+    else if (v !== null && typeof v === "object")
+      Object.values(v).forEach(collect);
+  };
+  for (const c of all) for (const call of c.trace.calls) collect(call.result);
+
   // optional steps in a row that the same recordings made share one condition
   const conditions = new Map<string, Condition>();
   let i = 0;
@@ -710,6 +731,7 @@ function compileUsed(
     const groupIds = base.ids.slice(i, end + 1);
     const rule =
       learnRule(yesK.map(before), noK.map(before)) ??
+      learnNumberRule(yesK.map(before), noK.map(before), written, dataValues) ??
       learnInputRule(
         yesK.map((k) => all[k]!.trace.meta.inputs),
         noK.map((k) => all[k]!.trace.meta.inputs),

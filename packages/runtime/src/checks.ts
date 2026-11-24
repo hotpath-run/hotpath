@@ -7,9 +7,11 @@ import {
   lookupReference,
   mentions,
   numbersInText,
+  renderTemplate,
   selectedItems,
   statesFigure,
   statesTime,
+  trimData,
   type Calculation,
   type Figure,
   type GroundingEntry,
@@ -135,13 +137,24 @@ export function figureProblems(
   ctx: TemplateContext,
   text: string,
 ): { missing: string[]; stale: string[] } {
-  const missing = figures
-    .filter((f) =>
-      f.time !== undefined
-        ? !statesTime(text, f.time)
-        : !statesFigure(text, f.value),
-    )
-    .map((f) => f.time ?? formatFigure(f.value));
+  const missing = [
+    ...figures
+      .filter((f) =>
+        f.time !== undefined
+          ? !statesTime(text, f.time)
+          : !statesFigure(text, f.value),
+      )
+      .map((f) => f.time ?? formatFigure(f.value)),
+    // a top figure is its item as much as its number ("Soylent (4100)")
+    ...figures
+      .filter(
+        (f) =>
+          f.name !== undefined &&
+          f.value !== 0 && // "none": any wording of nothing will do
+          !text.toLowerCase().includes(f.name.toLowerCase()),
+      )
+      .map((f) => f.name!),
+  ];
   const inData = new Set<number>();
   const visit = (n: unknown) => {
     if (typeof n === "number") inData.add(Math.abs(n));
@@ -201,7 +214,9 @@ export function emptyLists(
   });
 }
 
-const URL_RE = /\bhttps?:\/\/[^\s<>"'`)\]]+/gi;
+// a link ends at full-width punctuation and dashes too: a free model wrote
+// "…/1）—" and the bracket read as part of a link from the data made it look planted
+const URL_RE = /\bhttps?:\/\/[^\s<>"'`)\]）】」』，。、；：！？—–…]+/gi;
 const EMAIL_RE = /\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b/g;
 
 /**
@@ -294,4 +309,44 @@ export function stepsRead(prompt: string): string[] {
       [...prompt.matchAll(/\{\{steps\.([^.}]+)\./g)].map((m) => m[1]!),
     ),
   ];
+}
+
+/**
+ * The step's data as sent to the model: with the lists the compiler found code
+ * accounts for (`trim`) left out. Only when every figure computes today: a
+ * figure code cannot give leaves the model needing the items, so all are sent.
+ */
+export function sentData(
+  step: { prompt: string; trim?: string[]; calculations?: Calculation[] },
+  ctx: TemplateContext,
+  full: string,
+): { data: string; trimmed: boolean } {
+  if (!step.trim?.length || process.env.HOTPATH_TRIM === "0")
+    return { data: full, trimmed: false };
+  if ((step.calculations ?? []).some((c) => computeFigures(c, ctx) === null))
+    return { data: full, trimmed: false };
+  const ctx2 = trimData(ctx, step.trim);
+  if (!ctx2) return { data: full, trimmed: false };
+  return { data: String(renderTemplate(step.prompt, ctx2)), trimmed: true };
+}
+
+/** sending this many times the recording's data is worth a warning… */
+const GROWTH = 3;
+/** …once it is more than this many extra characters (about 1,000 tokens) */
+const GROWTH_MIN_CHARS = 4000;
+
+/** The warning for a step whose data outgrew the recording's, or null. */
+export function inputGrowth(
+  stepId: string,
+  chars: number,
+  recordedChars: number | undefined,
+): string | null {
+  if (!recordedChars || chars < recordedChars * GROWTH) return null;
+  if (chars - recordedChars < GROWTH_MIN_CHARS) return null;
+  const times = (chars / recordedChars).toFixed(1);
+  return (
+    `⚠ ${stepId}: today's data for the model is ${chars.toLocaleString("en-US")} characters, ` +
+    `${times}× the recording's ${recordedChars.toLocaleString("en-US")}, so this step costs about ${times}× as much. ` +
+    "If the report only needs figures from it, record a run whose report states them, so code computes them and the data is left out"
+  );
 }

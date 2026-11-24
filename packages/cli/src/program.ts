@@ -2,6 +2,8 @@ import { Command, InvalidArgumentError } from "commander";
 
 import {
   compileTaskInMemory,
+  confirmWorkflow,
+  formatRecordingSummary,
   formatCompileResult,
   formatWorkflow,
   loadWorkflow,
@@ -245,14 +247,26 @@ First steps:
       "--strict",
       "refuse a recording that has a warning: write nothing and exit 1 (then record the task again)",
     )
+    .option("--yes", "confirm the recording without asking (CI, scripts)")
+    .option(
+      "--read-only",
+      "the task only reads: accept a recording with no action (kept by later compiles)",
+    )
     .action(
       (
         task: string,
-        options: { trace?: string; require?: string[]; strict?: boolean },
+        options: {
+          trace?: string;
+          require?: string[];
+          strict?: boolean;
+          yes?: boolean;
+          readOnly?: boolean;
+        },
       ) =>
         guarded(async () => {
           const compiled = await compileTaskInMemory(task, options.trace, {
             require: options.require,
+            readOnly: options.readOnly,
           });
           const { workflow, notes } = compiled;
           // replay once on the recorded data (no model, side effects dry):
@@ -275,8 +289,33 @@ First steps:
           console.log(formatCompileResult(workflow));
           for (const note of notes) console.log(`+ ${note}`);
           for (const warning of warnings) console.log(`⚠ ${warning}`);
+          console.log(`\n${formatRecordingSummary(workflow)}`);
+          // never prompt without a terminal: leave it unconfirmed and say how
+          const ok =
+            options.yes ||
+            (process.stdin.isTTY && (await confirm("\nis this right? [y/N] ")));
+          if (ok) {
+            await confirmWorkflow(task);
+            console.log(`confirmed "${task}": it can now replay`);
+          } else {
+            console.log(
+              `not confirmed: "${task}" will not replay until you run: hotpath confirm ${task}`,
+            );
+          }
           await afterCommand();
         }),
+    );
+
+  program
+    .command("confirm")
+    .description("Confirm a compiled workflow so it may replay")
+    .argument("<task>", "task name")
+    .action((task: string) =>
+      guarded(async () => {
+        const workflow = await confirmWorkflow(task);
+        console.log(formatRecordingSummary(workflow));
+        console.log(`confirmed "${task}": it can now replay`);
+      }),
     );
 
   program

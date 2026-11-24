@@ -2,6 +2,21 @@
 
 All notable changes. Versions follow [semantic versioning](https://semver.org); before 1.0 a minor version may change behaviour, and the change is listed here.
 
+## 0.4.0
+
+Replays you can trust: a workflow now says when it is not sure instead of acting wrong, and works out more of its figures and decisions with code. Measured on a new benchmark of 11 real-world workflows, each recorded once and replayed on 4 new days (a normal day, another, a big day, an empty day): with a free model as both agent and replay model, replays went from 21/44 right with 16 silently wrong to **43/44 right with none silently wrong**; with Claude (Sonnet records, Haiku replays) 24/24 on the 6 workflows tried.
+
+- **Check a recording before it goes live.** `hotpath compile` shows what the recorded run did (its actions, its message, its per-item decisions) and asks "is this right?". An unconfirmed workflow does not replay on its own: `hotpath confirm <task>` later, or `--yes` in CI. A wrong recording is otherwise replayed wrong every day.
+- **Half-done recordings are refused.** When the agent stopped (an error, a time-out) before its first action, compile says what went wrong instead of saving a workflow that does nothing. `--read-only` for tasks that only read.
+- **Per-item decisions are asked twice**, the second time with the items in reverse order. Any answer that differs goes to your agent before anything is done. `HOTPATH_DECIDE_TWICE=0` asks once.
+- **Decisions by code when the recording shows the rule.** A choice that follows one number in bands (a lead's tier from its company's size) or a small rulebook (a ticket's category, then its priority or an amount: "refund up to 50, forward above") is learned from the recorded items and made by code, with no model call. An item between two recorded bands (no evidence for either side) goes to your agent, whose recording closes the gap; a value never seen (a new category) is asked of the model.
+- **Report figures by code.** Totals per group (per region, per service, per vendor), filtered sums ("paid orders only", "due before today"), counts of lines holding a word, the top item, the most frequent message and counts per decided value are computed on each day's data; the model writes around them and the text must state them. Money keeps its cents.
+- **Number rules from two recordings.** Record a calm and an alert day: "page only if the error rate is above 2" is learned from the agent's own words.
+- **Cursor pages** (`next_cursor`, `next_token`) are followed like page numbers; a page read past the last one no longer splits a loop.
+- **Replay cost guard.** Long lists the code fully accounts for (a day of log lines) are no longer sent to the model: on the benchmark's log report a replay went from $0.024 to $0.0016. A step whose data is over 3× the recording's prints a warning. `HOTPATH_TRIM=0` sends everything.
+- **Safer loops.** A list longer than a loop's `maxItems` now goes to your agent instead of being silently cut short.
+- **Fixed:** a link followed by full-width punctuation was read as a planted link; a threshold the agent wrote ("mid 100–999") was taken for a copied fact.
+
 ## 0.3.1
 
 Replays are more reliable and safer. Found by a new fuzzer (generated workflows replayed on changed data) and by a support-bot test with 100 customers.

@@ -91,14 +91,26 @@ describe("per-item conditions in a loop", () => {
     });
   });
 
-  it("does not guess when no field separates the items it acted on", () => {
+  it("does not guess a rule when no field separates the items it acted on: the replay model decides per item", () => {
     const wf = compile([
       call("get_inbox", { date: "2026-10-01" }, { emails: inbox }),
       // e1 and e2: spam and normal; no rule covers just those two
       call("archive", { id: "e1" }, { ok: true }),
       call("archive", { id: "e2" }, { ok: true }),
     ]);
-    expect(wf.steps.map((s) => s.type)).toEqual(["tool", "tool", "tool"]);
+    // Plain steps used to stay here: archive(emails.0.id), archive(emails.1.id),
+    // which a new day replays against whatever sits first and second (the
+    // hard-workflow tests). No rule in code still; the decision is the model's.
+    expect(wf.steps.map((s) => s.type)).toEqual(["tool", "foreach"]);
+    const loop = wf.steps[1]!;
+    expect(loop.type === "foreach" && loop.decide?.actions).toEqual([
+      { tool: "archive", fields: {} },
+    ]);
+    expect(loop.type === "foreach" && loop.body[0]!.when).toEqual({
+      kind: "equals",
+      ref: "choice.action",
+      value: "archive",
+    });
   });
 
   it("still compiles the full-cover loop as before (no condition)", () => {

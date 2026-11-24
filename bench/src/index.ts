@@ -229,6 +229,7 @@ async function benchTask(
         task,
         ...(recordingsFlag > 1 ? [] : ["--trace", traceFile]),
         ...(strict ? ["--strict"] : []),
+        "--yes",
       ],
       "default",
     );

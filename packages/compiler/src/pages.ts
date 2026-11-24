@@ -32,12 +32,17 @@ export function collapsePages<T extends PageCall>(
   const taken = new Set<number>();
   for (let i = 0; i < calls.length; i++) {
     if (taken.has(i)) continue;
-    const chain = pageChain(calls, i, isReadOnly, taken);
+    const chain =
+      pageChain(calls, i, isReadOnly, taken) ??
+      cursorChain(calls, i, isReadOnly, taken);
     if (!chain) {
       out.push(calls[i]!);
       continue;
     }
     for (const k of chain.indices) taken.add(k);
+    // a page asked for after the last one (empty, naming no next page) adds
+    // nothing, and left in place it splits the lookups around it in two
+    for (const k of pastTheEnd(calls, chain, isReadOnly, taken)) taken.add(k);
     const merged = chain.indices
       .slice(1)
       .reduce<unknown>(
@@ -49,6 +54,101 @@ export function collapsePages<T extends PageCall>(
     paginate.set(call, { arg: chain.arg, next: chain.next });
   }
   return { calls: out, paginate };
+}
+
+/** Later reads of the same list past its last page: empty, and naming no next page. */
+function pastTheEnd(
+  calls: PageCall[],
+  chain: { indices: number[]; arg: string; next: string },
+  isReadOnly: (tool: string) => boolean,
+  taken: Set<number>,
+): number[] {
+  const last = calls[chain.indices[chain.indices.length - 1]!]!;
+  const lastPage = last.args[chain.arg];
+  if (typeof lastPage !== "number") return [];
+  const rest = (c: PageCall) =>
+    Object.fromEntries(Object.entries(c.args).filter(([k]) => k !== chain.arg));
+  const out: number[] = [];
+  for (
+    let k = chain.indices[chain.indices.length - 1]! + 1;
+    k < calls.length;
+    k++
+  ) {
+    const c = calls[k]!;
+    if (!isReadOnly(c.tool)) break;
+    if (taken.has(k) || c.tool !== last.tool) continue;
+    const page = c.args[chain.arg];
+    if (typeof page !== "number" || page <= lastPage) continue;
+    if (!same(rest(c), rest(last)) || !isObject(c.result)) continue;
+    const r = c.result;
+    const empty = Object.values(r).every(
+      (v) => !Array.isArray(v) || v.length === 0,
+    );
+    const hasList = Object.values(r).some(Array.isArray);
+    if (hasList && empty && (r[chain.next] ?? null) === null) out.push(k);
+  }
+  return out;
+}
+
+/**
+ * Cursor pages: the next call passes, in one argument, the string the previous
+ * result gave in one field (next_cursor, next_token); the first call may have no
+ * such argument. Everything else is the same; the last page gives no cursor.
+ * Measured: an accounts-payable workflow kept the 4 fixed pages it was recorded
+ * with and read 40 of 120 invoices on a big day.
+ */
+function cursorChain(
+  calls: PageCall[],
+  start: number,
+  isReadOnly: (tool: string) => boolean,
+  taken: Set<number>,
+): { indices: number[]; arg: string; next: string } | null {
+  const first = calls[start]!;
+  if (!isReadOnly(first.tool) || !isObject(first.result)) return null;
+  for (const [next, token] of Object.entries(first.result)) {
+    if (typeof token !== "string" || token === "") continue;
+    let arg: string | null = null;
+    const indices = [start];
+    for (;;) {
+      const prev = calls[indices[indices.length - 1]!]!;
+      const want = isObject(prev.result) ? prev.result[next] : undefined;
+      if (typeof want !== "string" || want === "") break;
+      let found = -1;
+      for (let k = indices[indices.length - 1]! + 1; k < calls.length; k++) {
+        const cand = calls[k]!;
+        if (!isReadOnly(cand.tool)) break; // a side effect ends the chain
+        if (taken.has(k) || cand.tool !== first.tool || !isObject(cand.result))
+          continue;
+        const carrying = Object.keys(cand.args).filter(
+          (a) => cand.args[a] === want && (arg === null || a === arg),
+        );
+        if (carrying.length !== 1) continue;
+        const a = carrying[0]!;
+        const rest = new Set([
+          ...Object.keys(first.args),
+          ...Object.keys(cand.args),
+        ]);
+        rest.delete(a);
+        if (![...rest].every((key) => same(first.args[key], cand.args[key])))
+          continue;
+        arg = a;
+        found = k;
+        break;
+      }
+      if (found < 0) break;
+      indices.push(found);
+    }
+    const last = calls[indices[indices.length - 1]!]!;
+    if (
+      arg !== null &&
+      indices.length >= 2 &&
+      isObject(last.result) &&
+      (last.result[next] ?? null) === null
+    ) {
+      return { indices, arg, next };
+    }
+  }
+  return null;
 }
 
 /** The page after `prev`: same tool, same arguments but the page number plus one. */

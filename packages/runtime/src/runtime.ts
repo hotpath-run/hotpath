@@ -7,6 +7,7 @@ import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
+  assertConfirmed,
   compileTaskInMemory,
   loadWorkflow,
   lostActions,
@@ -26,8 +27,14 @@ import {
   DEFAULT_MAX_PAGES,
   mergePages,
   cheapMaxTokens,
+  bandDecision,
+  bandsText,
   cheapReasoning,
+  detailsPerItem,
   fillRows,
+  inOpenGap,
+  tableDecision,
+  tableSize,
   formatMs,
   lookupReference,
   mentions,
@@ -42,24 +49,34 @@ import {
   type CaseStep,
   type Condition,
   type GroundingEntry,
+  type ItemDecision,
   type StepGuard,
   type TemplateContext,
   toolStepsOf,
   type ToolStep,
   type Workflow,
   requestInputs,
+  whenText,
   type WorkflowStep,
 } from "@hotpathrun/shared";
+import {
+  compareDecisions,
+  decisionPrompt,
+  parseDecisions,
+  type Decision,
+} from "./decisions.js";
 
 import {
   emptyLists,
   figureProblems,
   foreignAddresses,
   figuresPrompt,
+  inputGrowth,
   latestItemFacts,
   selectionHints,
   stepsRead,
   selectionMissing,
+  sentData,
   todaysFigures,
 } from "./checks.js";
 import { Journal } from "./journal.js";
@@ -240,6 +257,10 @@ export interface RunMetrics {
   reusedSteps?: string[];
   /** llm steps whose list rows were written by code (the model wrote the rest) */
   filledSteps?: string[];
+  /** llm steps sent without the lists code fully accounts for (see `trim`) */
+  trimmedSteps?: string[];
+  /** llm steps whose data outgrew the recording's by far: they cost that much more */
+  inputWarnings?: Array<{ step: string; chars: number; recordedChars: number }>;
   /** actions an interrupted run with the same inputs had done, not repeated */
   resumedActions?: string[];
 }
@@ -263,6 +284,8 @@ export async function runTask(
   options: RunOptions,
 ): Promise<RunMetrics> {
   const workflow = await loadWorkflow(task);
+  // --dry-run sends nothing, so previewing an unconfirmed workflow is fine
+  if (!options.dryRun) assertConfirmed(workflow);
   try {
     return await runWorkflow(workflow, options);
   } catch (err) {
@@ -319,7 +342,18 @@ async function fallback(
   // Recompile from the trace the agent just wrote, but look before replacing:
   // if the agent skipped reads the old workflow had, the new one would
   // silently lose those data sources.
-  const { workflow: next } = await compileTaskInMemory(task);
+  // a fallback run that stopped before acting is not refused here: the checks
+  // below see the lost actions and keep the old workflow, saying why
+  const { workflow: compiled } = await compileTaskInMemory(task, undefined, {
+    readOnly: true,
+  });
+  // the user already confirmed this task; the agent ran on their behalf. Only
+  // the owner marks a task read-only, so the mark comes from the old workflow.
+  const next = {
+    ...compiled,
+    confirmed: workflow.confirmed,
+    readOnly: workflow.readOnly,
+  };
   // Also refuse to drop actions or AI steps: a small model that answered in
   // text during the fallback would leave a workflow that only reads.
   const lostReads = lostReadOnlySteps(workflow, next);
@@ -498,10 +532,41 @@ async function readAgentRun(
   }
 }
 
+const idleMetrics = (driftStep: string, reason: string): RunMetrics => ({
+  durationMs: 0,
+  llmCalls: 0,
+  promptTokens: 0,
+  completionTokens: 0,
+  costUsd: 0,
+  fallback: false,
+  steps: [],
+  connectMs: 0,
+  toolMs: 0,
+  llmMs: 0,
+  rateLimitWaitMs: 0,
+  toolCalls: [],
+  driftStep,
+  reason,
+});
+
 export async function runWorkflow(
   workflow: Workflow,
   options: RunOptions,
 ): Promise<RunMetrics> {
+  // actions on items picked by position: a new day's list has other items in
+  // those places, so replaying them acts on the wrong ones (compiler rule 12)
+  const positional = workflow.positional?.[0];
+  if (positional) {
+    const reason =
+      `${positional.steps.join(", ")} act on items of ${positional.list} by position (item 1, item 2…), ` +
+      "which a new day's list has in other places: the agent does this task instead. Record it again so the compiler sees one action per item.";
+    throw new DriftError(
+      positional.steps[0]!,
+      reason,
+      false,
+      idleMetrics(positional.steps[0]!, reason),
+    );
+  }
   const missing = Object.entries(workflow.inputs).filter(
     ([name, def]) => def.required !== false && !(name in options.inputs),
   );
@@ -568,6 +633,8 @@ export async function runWorkflow(
   const reuse = options.reuse ?? process.env.HOTPATH_REUSE !== "0";
   const reusedSteps: string[] = [];
   const filledSteps: string[] = [];
+  const trimmedSteps: string[] = [];
+  const inputWarnings: NonNullable<RunMetrics["inputWarnings"]> = [];
   const answers = reuse ? await loadAnswers(workflow.task) : {};
   const modelAnswers: string[] = [];
   const firstAttemptIssues: string[] = [];
@@ -604,6 +671,8 @@ export async function runWorkflow(
     ...(repairedSteps.length > 0 ? { repairedSteps } : {}),
     ...(reusedSteps.length > 0 ? { reusedSteps } : {}),
     ...(filledSteps.length > 0 ? { filledSteps } : {}),
+    ...(trimmedSteps.length > 0 ? { trimmedSteps } : {}),
+    ...(inputWarnings.length > 0 ? { inputWarnings } : {}),
     ...(resumedActions.length > 0 ? { resumedActions } : {}),
     ...(firstAttemptIssues.length > 0 ? { firstAttemptIssues } : {}),
     // opt-in: the text a guard rejected can hold customer data
@@ -774,6 +843,147 @@ export async function runWorkflow(
         return answer === true;
       };
 
+      // A loop's per-item decisions: one question for all items, checked by code,
+      // asked again once with the reason when the answer is wrong.
+      const decideItems = async (
+        spec: ItemDecision,
+        items: unknown[],
+        as: string,
+      ): Promise<Decision[]> => {
+        // Code decides first: the recorded bands (one number) or rulebook
+        // (category, then priority or an amount). An item between two recorded
+        // bands goes to the agent: no evidence says which side it is on. The
+        // model is asked only about items code has never seen the like of, and
+        // code's answers replace its own on the rest, so they cannot disagree.
+        const details = spec.details
+          ? detailsPerItem(
+              items,
+              ctx.steps[spec.details.step]?.results,
+              spec.details.distinct,
+            )
+          : items.map(() => undefined);
+        const keyOf = (it: unknown) =>
+          String(
+            spec.key.reduce<unknown>(
+              (n, k) =>
+                n !== null && typeof n === "object"
+                  ? (n as Record<string, unknown>)[k]
+                  : undefined,
+              it,
+            ),
+          );
+        const byCode: Array<Decision | null> = items.map(() => null);
+        const gaps: string[] = [];
+        items.forEach((it, i) => {
+          if (spec.bands) {
+            const d = bandDecision(spec.bands, it, details[i]);
+            if (d) byCode[i] = d;
+            const v = inOpenGap(spec.bands, it, details[i]);
+            if (v !== null)
+              gaps.push(`${keyOf(it)}: ${spec.bands.path.join(".")} ${v}`);
+          } else if (spec.table) {
+            const a = tableDecision(spec.table, it, details[i]);
+            if ("decision" in a) byCode[i] = a.decision;
+            else if ("gap" in a) gaps.push(`${keyOf(it)}: ${a.gap}`);
+          }
+        });
+        const rulebook = spec.bands
+          ? `the recorded bands (${bandsText(spec.bands)})`
+          : `the recorded rules (${spec.table ? tableSize(spec.table) : 0} cases)`;
+        if (gaps.length > 0) {
+          return drift(
+            `${gaps.length} ${as}${gaps.length === 1 ? "" : "s"} (${gaps.slice(0, 3).join("; ")}) ` +
+              `fall between bands the recording never closed, in ${rulebook}: ` +
+              "the agent decides, and its recording closes the gap",
+          );
+        }
+        if ((spec.bands || spec.table) && byCode.every((d) => d !== null)) {
+          const decided = byCode as Decision[];
+          const counts = new Map<string, number>();
+          for (const d of decided) {
+            const v = spec.bands ? String(d[spec.bands.field]) : d.action;
+            counts.set(v, (counts.get(v) ?? 0) + 1);
+          }
+          console.log(
+            `◇ ${step.id}: decided per ${as} by ${rulebook}: ` +
+              [...counts].map(([v, n]) => `${v} ×${n}`).join(", "),
+          );
+          return decided;
+        }
+        const byBands = byCode;
+        const withBands = (ds: Decision[]) =>
+          ds.map((d, i) => (byBands[i] as Decision | null) ?? d);
+        const first = withBands(await askDecisions(spec, items, as));
+        // A weak model that guesses gives a different answer when asked again;
+        // asking with the items reversed also catches answers by position. Any
+        // difference goes to the agent before anything is done (roadmap A.4).
+        if (process.env.HOTPATH_DECIDE_TWICE !== "0" && items.length > 0) {
+          const order = items.map((_, i) => items.length - 1 - i);
+          const reversed = await askDecisions(spec, items, as, order);
+          const second = withBands(
+            order.map((_, i) => reversed[order.indexOf(i)]!),
+          );
+          const differ = compareDecisions(first, second, items, spec);
+          if (differ.length > 0) {
+            return drift(
+              `the replay model gave two different answers for ${differ.length} of ${items.length} ${as}${items.length === 1 ? "" : "s"} ` +
+                `(${differ.slice(0, 3).join("; ")}${differ.length > 3 ? "; …" : ""}): ` +
+                "not sure enough to act, so the agent decides (HOTPATH_DECIDE_TWICE=0 asks once)",
+            );
+          }
+        }
+        const counts = new Map<string, number>();
+        for (const d of first)
+          counts.set(d.action, (counts.get(d.action) ?? 0) + 1);
+        console.log(
+          `◇ ${step.id}: decided per ${as}: ${[...counts].map(([a, n]) => `${a} ×${n}`).join(", ")}`,
+        );
+        return first;
+      };
+
+      /** One answer for all items, checked, with one retry; in item order. */
+      const askDecisions = async (
+        spec: ItemDecision,
+        items: unknown[],
+        as: string,
+        order?: number[],
+      ): Promise<Decision[]> => {
+        const listed = order ? order.map((i) => items[i]) : items;
+        const prompt = decisionPrompt(spec, items, as, ctx, order);
+        let question = prompt;
+        let error = "";
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const result = await chat({
+            model: CHEAP_MODEL,
+            messages: [{ role: "user", content: question }],
+            reasoningEffort: cheapReasoning(),
+            maxTokens: cheapMaxTokens(),
+          });
+          llmCalls += result.llmCalls;
+          promptTokens += result.promptTokens;
+          completionTokens += result.completionTokens;
+          llmCostUsd += usdCost(
+            CHEAP_MODEL,
+            result.promptTokens,
+            result.completionTokens,
+          );
+          stepWaitMs += result.rateLimitWaitMs ?? 0;
+          rateLimitWaitMs += result.rateLimitWaitMs ?? 0;
+          modelAnswers.push(result.text ?? "");
+          if (result.truncated) {
+            await drift(
+              `llm stopped at the ${cheapMaxTokens()}-token cap (HOTPATH_CHEAP_MAX_TOKENS) while deciding per ${as}`,
+            );
+          }
+          // checked in the order asked, so each answer must name the item it is for
+          const parsed = parseDecisions(result.text ?? "", listed, spec);
+          if (parsed.ok) return parsed.decisions;
+          error = parsed.error;
+          question = `${prompt}\n\nYour previous answer could not be used: ${error}. Answer again, exactly in the format asked.`;
+        }
+        return drift(`could not decide per ${as}: ${error}`);
+      };
+
       // A step only some recordings made: decide whether this run makes it.
       if (step.when) {
         if (!(await decide(step.when))) {
@@ -866,13 +1076,27 @@ export async function runWorkflow(
           step.layout && process.env.HOTPATH_LAYOUT !== "0"
             ? step.layout
             : undefined;
+        // Lists code fully accounts for are not sent (the reuse key above
+        // still covers every item), and a step sending far more than it did
+        // when recorded is said, since it costs that much more (A.8)
+        const sent = sentData(step, ctx, dataPrompt);
+        if (sent.trimmed) trimmedSteps.push(step.id);
+        const growth = inputGrowth(step.id, sent.data.length, step.inputChars);
+        if (growth) {
+          console.log(growth);
+          inputWarnings.push({
+            step: step.id,
+            chars: sent.data.length,
+            recordedChars: step.inputChars!,
+          });
+        }
         // A selection (see `selective`) is not "every item": say what to do instead.
         const askedData = step.selective
-          ? dataPrompt.replace(
+          ? sent.data.replace(
               "and cover every item in it.",
               "and work out the figures from it. " + SELECTIVE_NOTE,
             )
-          : dataPrompt;
+          : sent.data;
         // After the example, so it is the last thing the model reads: the
         // example's language and facts dominate a prompt that ends with them
         const requestTail =
@@ -1018,8 +1242,9 @@ export async function runWorkflow(
         }
         let text = await ask(prompt);
         // the length guard is about what the model wrote: rows grow with the data
+        // counted like the compiler counted the recording: loop results too
         const todayItems = countItems(
-          Object.values(ctx.steps).map((s) => s.result),
+          Object.values(ctx.steps).map((s) => s.result ?? s.results),
         );
         let failure = checkLlmGuard(step.guard, text, todayItems);
         if (failure) await drift(failure);
@@ -1120,15 +1345,60 @@ export async function runWorkflow(
           );
         }
         const all = list as unknown[];
+        // maxItems caps what a loop acts on, never what it looks at: a long
+        // list cut short was a silent wrong answer (the 117th invoice of a big
+        // day was never flagged). With rules on the items, only the items they
+        // pick count; otherwise a list over the cap goes to the agent.
         if (all.length > step.maxItems) {
-          console.log(
-            `⚠ ${step.id}: ${all.length} items, running the first ${step.maxItems} (maxItems)`,
+          const rules = step.body.every(
+            (b) => b.when !== undefined && !conditionAsks(b.when),
           );
+          const picked =
+            rules && !step.decide
+              ? all.filter((item) => {
+                  const scoped = {
+                    ...ctx,
+                    vars: { ...ctx.vars, [step.as]: item },
+                  };
+                  return step.body.some(
+                    (b) => checkCondition(b.when!, scoped) === true,
+                  );
+                }).length
+              : all.length;
+          if (picked > step.maxItems) {
+            await drift(
+              `${step.id}: ${picked} items to act on, more than maxItems (${step.maxItems}); ` +
+                "the agent does it (raise maxItems in the workflow file to allow more)",
+            );
+          }
         }
-        const items = all.slice(0, step.maxItems);
+        const items = all;
+        // every item's decision first: a wrong answer stops the run before any action
+        const decisions =
+          step.decide && items.length > 0
+            ? await decideItems(step.decide, items, step.as)
+            : null;
         const results: unknown[] = [];
+        const seen: string[] = [];
         for (const [i, item] of items.entries()) {
-          ctx.vars = { ...ctx.vars, [step.as]: item };
+          if (step.distinct) {
+            const value = JSON.stringify(
+              step.distinct.reduce<unknown>(
+                (v, k) =>
+                  v !== null && typeof v === "object"
+                    ? (v as Record<string, unknown>)[k]
+                    : undefined,
+                item,
+              ),
+            );
+            if (seen.includes(value)) continue;
+            seen.push(value);
+          }
+          ctx.vars = {
+            ...ctx.vars,
+            [step.as]: item,
+            ...(decisions ? { choice: decisions[i] } : {}),
+          };
           let acted = false;
           for (const body of step.body) {
             if (body.when && !(await decide(body.when))) continue;
@@ -1142,8 +1412,12 @@ export async function runWorkflow(
           const last = step.body[step.body.length - 1]!;
           if (acted) results.push(ctx.steps[last.id]?.result);
         }
-        if (ctx.vars) delete ctx.vars[step.as];
-        ctx.steps[step.id] = { results };
+        if (ctx.vars) {
+          delete ctx.vars[step.as];
+          delete ctx.vars.choice;
+        }
+        // a loop with decisions reports them: later steps read who got what
+        ctx.steps[step.id] = { results: decisions ?? results };
         record(true);
         return;
       }
@@ -1248,14 +1522,37 @@ export function checkToolGuard(
  * true / false for a rule, null for a question (the model decides). An empty
  * list, empty text or a missing value counts as empty.
  */
+/** Does deciding this condition need the model (a question), not just code? */
+export function conditionAsks(when: Condition): boolean {
+  return when.kind === "ask";
+}
+
 export function checkCondition(
   when: Condition,
   ctx: TemplateContext,
 ): boolean | null {
   if (when.kind === "ask") return null;
+  if (when.kind === "all")
+    return when.of.every((c) => checkCondition(c, ctx) === true);
   const value = lookupReference(when.ref, ctx);
+  // dates as ISO text ("2026-10-31", or with a time) compare in order; anything
+  // else is no date and the step does not run
+  if (when.kind === "before" || when.kind === "after") {
+    const other = lookupReference(when.other, ctx);
+    const iso = (v: unknown): v is string =>
+      typeof v === "string" && /^\d{4}-\d{2}-\d{2}/.test(v);
+    if (!iso(value) || !iso(other)) return false;
+    const [a, b] = [value.slice(0, 10), other.slice(0, 10)];
+    return when.kind === "before" ? a < b : a > b;
+  }
   if (when.kind === "equals") return value === when.value;
   if (when.kind === "notEquals") return value !== when.value;
+  // not a number today: the step does not run (the read step's guard has
+  // already stopped the run if the field changed type)
+  if (when.kind === "above")
+    return typeof value === "number" && value > when.value;
+  if (when.kind === "below")
+    return typeof value === "number" && value < when.value;
   const empty =
     value === undefined ||
     value === null ||
@@ -1278,6 +1575,16 @@ export function conditionText(when: Condition): string {
       return `${when.ref} is not ${JSON.stringify(when.value)}`;
     case "notEquals":
       return `${when.ref} is ${JSON.stringify(when.value)}`;
+    case "above":
+      return `${when.ref} is not above ${when.value}`;
+    case "below":
+      return `${when.ref} is not below ${when.value}`;
+    case "before":
+      return `${when.ref} is not before ${when.other}`;
+    case "after":
+      return `${when.ref} is not after ${when.other}`;
+    case "all":
+      return `not all of: ${when.of.map(whenText).join(" and ")}`;
     case "ask":
       return `the model said no to: ${when.question}`;
   }

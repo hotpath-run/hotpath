@@ -48,6 +48,16 @@ export function whenText(when: Condition): string {
       return `${when.ref} is ${JSON.stringify(when.value)}`;
     case "notEquals":
       return `${when.ref} is not ${JSON.stringify(when.value)}`;
+    case "above":
+      return `${when.ref} is above ${when.value}`;
+    case "below":
+      return `${when.ref} is below ${when.value}`;
+    case "before":
+      return `${when.ref} is before ${when.other}`;
+    case "after":
+      return `${when.ref} is after ${when.other}`;
+    case "all":
+      return when.of.map(whenText).join(" and ");
     case "ask":
       return "the replay model says yes (no rule told the recordings apart)";
   }

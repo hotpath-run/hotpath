@@ -51,3 +51,12 @@ describe("hotpath CLI", () => {
     }
   });
 });
+
+describe("recording check commands", () => {
+  it("compile has --yes and confirm exists", () => {
+    const program = createProgram();
+    const compile = program.commands.find((c) => c.name() === "compile")!;
+    expect(compile.helpInformation()).toContain("--yes");
+    expect(program.commands.some((c) => c.name() === "confirm")).toBe(true);
+  });
+});

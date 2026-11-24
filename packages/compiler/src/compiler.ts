@@ -2,19 +2,28 @@ import {
   answerKey,
   countItems,
   DEFAULT_MAX_ITEMS,
+  detailsPerItem,
   mentions,
   normalizeText,
+  numbersInText,
   renderTemplate,
   REQUEST_RULE,
   requestInputs,
   type Condition,
   type DroppedCall,
   type GroundingEntry,
+  type ItemDecision,
+  type ToolStep,
   type TraceFile,
   type Workflow,
   type WorkflowStep,
 } from "@hotpathrun/shared";
-import { features, learnItemRule, type Feature } from "./rules.js";
+import {
+  features,
+  learnItemRule,
+  learnItemThresholdRule,
+  type Feature,
+} from "./rules.js";
 
 import { collapsePages } from "./pages.js";
 import { relaxPositional, withSelectionRules } from "./grounding.js";
@@ -169,9 +178,35 @@ export function compileTraceDetailed(
     return value;
   };
 
+  // what a rule on items may be grounded in: numbers the agent wrote that no
+  // data holds ("over 10,000 EUR") and the run's date inputs
+  const facts: ItemFacts = {
+    written: kept.flatMap((c) =>
+      Object.values(c.args)
+        .filter((v): v is string => typeof v === "string")
+        .flatMap((v) => numbersInText(v)),
+    ),
+    dataValues: new Set<number>(),
+    inputs: trace.meta.inputs,
+  };
+  const collectNumbers = (v: unknown): void => {
+    if (typeof v === "number") facts.dataValues.add(v);
+    else if (Array.isArray(v)) v.forEach(collectNumbers);
+    else if (v !== null && typeof v === "object")
+      Object.values(v).forEach(collectNumbers);
+  };
+  for (const c of kept) collectNumbers(c.result);
+
   for (let index = 0; index < kept.length;) {
     // rule 9: the same tool called once per item of an earlier list → foreach
-    const loop = detectLoop(kept, index, earlier, hints);
+    const loop = detectLoop(
+      kept,
+      index,
+      earlier,
+      hints,
+      !isSideEffect(kept[index]!.tool),
+      facts,
+    );
     if (loop) {
       const loopId = newId();
       const calls = kept.slice(index, index + loop.count);
@@ -214,6 +249,7 @@ export function compileTraceDetailed(
           },
         ],
         maxItems: DEFAULT_MAX_ITEMS,
+        ...(loop.distinct ? { distinct: loop.distinct } : {}),
       });
       earlier.push({ id: loopId, field: "results", result: results });
       if (!sideEffect) {
@@ -225,6 +261,33 @@ export function compileTraceDetailed(
         });
       }
       index += loop.count;
+      continue;
+    }
+
+    // rule 12: actions on the items of a list, chosen per item → a loop whose
+    // replay model decides each item's action before any action runs
+    const decision = detectDecisionLoop(kept, index, earlier, isSideEffect);
+    if (decision) {
+      const loopId = newId();
+      const built = buildDecisionLoop(decision, loopId, {
+        task: trace.meta.task,
+        request: requestInputs(trace.meta.inputs),
+        readOnlyResults,
+        steps,
+        earlier,
+        templateValue,
+      });
+      steps.push(built.step);
+      // the loop's results are its decisions: a summary written after it
+      // reads which item got what, instead of guessing from the example
+      earlier.push({ id: loopId, field: "results", result: built.results });
+      readOnlyResults.push({
+        id: loopId,
+        field: "results",
+        tool: `decisions per ${built.as}`,
+        result: built.results,
+      });
+      index += decision.count;
       continue;
     }
 
@@ -329,6 +392,7 @@ export function compileTraceDetailed(
     }
   }
 
+  const positional = positionalActions(steps);
   const workflow: Workflow = {
     version: 1,
     task: trace.meta.task,
@@ -344,6 +408,7 @@ export function compileTraceDetailed(
     ),
     steps,
     ...(dropped.length > 0 ? { droppedCalls: dropped } : {}),
+    ...(positional.length > 0 ? { positional } : {}),
   };
   return { workflow, recorded: earlier };
 }
@@ -356,6 +421,8 @@ interface LoopMatch {
   itemArgs: Map<string, string[]>;
   /** the loop acted on only some items: the rule on the item that picks them */
   when?: Condition;
+  /** one call per distinct value at this path in the item */
+  distinct?: string[];
 }
 
 /** Every array inside `node` (length ≥ `min`, 2 unless a loop is known), with its path. */
@@ -449,13 +516,19 @@ function detectLoop(
   index: number,
   earlier: Earlier[],
   hints: CompileHints,
+  readOnly = false,
+  facts?: ItemFacts,
 ): LoopMatch | null {
   const tool = calls[index]!.tool;
   const known = hints.loopTools?.has(tool) === true;
   let runEnd = index;
   while (runEnd < calls.length && calls[runEnd]!.tool === tool) runEnd++;
   const runLength = runEnd - index;
-  if (runLength < (known ? 1 : 2)) return null;
+  if (runLength < (known ? 1 : 2)) {
+    return runLength === 1 && !readOnly && facts
+      ? detectSingleItemLoop(calls[index]!, earlier, facts)
+      : null;
+  }
 
   for (const source of earlier) {
     if (source.field !== "result") continue;
@@ -496,7 +569,135 @@ function detectLoop(
       };
     }
   }
-  return detectItemSubsetLoop(calls, index, runLength, earlier, hints);
+  return (
+    detectDistinctLoop(calls, index, runLength, earlier, readOnly) ??
+    detectItemSubsetLoop(calls, index, runLength, earlier, hints) ??
+    // a tool another pass already looped is "known" and skips the early exit
+    (runLength === 1 && !readOnly && facts
+      ? detectSingleItemLoop(calls[index]!, earlier, facts)
+      : null)
+  );
+}
+
+interface ItemFacts {
+  written: number[];
+  dataValues: Set<number>;
+  inputs: Record<string, unknown>;
+}
+
+/**
+ * "Flag every overdue invoice over 10,000" on a day only one qualified: one
+ * action on one item of a list. It becomes a loop over the list only when a rule
+ * grounded in what the agent wrote and the run's dates tells that item apart
+ * from every other one; otherwise the call stays a plain step (it was).
+ */
+function detectSingleItemLoop(
+  call: TraceFile["calls"][number],
+  earlier: Earlier[],
+  facts: ItemFacts,
+): LoopMatch | null {
+  const unique = (items: unknown[], path: string[], value: unknown) =>
+    items.filter((it) => deepEqual(walk(it, path), value)).length === 1;
+  for (const source of earlier) {
+    if (source.field !== "result") continue;
+    for (const list of arraysIn(source.result, [], 2)) {
+      const items = list.items;
+      for (const [key, value] of Object.entries(call.args)) {
+        if (typeof value !== "string" && typeof value !== "number") continue;
+        const ix = items.findIndex((it) => pathsOf(it, value).length > 0);
+        if (ix < 0) continue;
+        const path = pathsOf(items[ix], value).find((p) =>
+          unique(items, p, value),
+        );
+        if (!path) continue;
+        const itemArgs = new Map<string, string[]>([[key, path]]);
+        for (const [other, v] of Object.entries(call.args)) {
+          if (other === key) continue;
+          const p = pathsOf(items[ix], v)[0];
+          if (p) itemArgs.set(other, p);
+        }
+        const as = loopVariable(list.path);
+        const { yes, no } = sampleItems(items, as, new Set([ix]));
+        const when = learnItemThresholdRule(
+          yes,
+          no,
+          facts.written,
+          facts.dataValues,
+          facts.inputs,
+        );
+        if (!when) continue;
+        return {
+          count: 1,
+          source: { id: source.id, path: list.path },
+          as,
+          itemArgs,
+          when,
+        };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * "Check the stock of each product the orders need": one call per distinct
+ * value of an item field, in the order the values first appear, covering every
+ * distinct value. Without it the calls stay plain steps pointing at orders 0, 1,
+ * 2 by position, which a new day's orders don't match.
+ */
+function detectDistinctLoop(
+  calls: TraceFile["calls"],
+  index: number,
+  runLength: number,
+  earlier: Earlier[],
+  readOnly: boolean,
+): LoopMatch | null {
+  if (runLength < 2) return null;
+  const window = calls.slice(index, index + runLength);
+  const keys = Object.keys(window[0]!.args).sort().join("\0");
+  if (window.some((c) => Object.keys(c.args).sort().join("\0") !== keys))
+    return null;
+  const varying = varyingArgs(window, null);
+  if (varying.length !== 1) return null;
+  const key = varying[0]!;
+  for (const source of earlier) {
+    if (source.field !== "result") continue;
+    for (const list of arraysIn(source.result, [], 2)) {
+      const candidates = new Set<string>();
+      for (const item of list.items) {
+        for (const p of pathsOf(item, window[0]!.args[key])) {
+          if (p.length > 0) candidates.add(JSON.stringify(p));
+        }
+      }
+      for (const raw of candidates) {
+        const path = JSON.parse(raw) as string[];
+        const firsts: unknown[] = [];
+        for (const item of list.items) {
+          const v = walk(item, path);
+          if (!firsts.some((f) => deepEqual(f, v))) firsts.push(v);
+        }
+        const ordered =
+          firsts.length < list.items.length &&
+          firsts.length === window.length &&
+          window.every((c, i) => deepEqual(c.args[key], firsts[i]));
+        // a lookup only reads: the order it ran in and a repeated call don't
+        // matter, only that every distinct value was looked up
+        const sameValues =
+          readOnly &&
+          window.every((c) => firsts.some((f) => deepEqual(f, c.args[key]))) &&
+          firsts.every((f) => window.some((c) => deepEqual(c.args[key], f)));
+        if (!ordered && !sameValues) continue;
+        return {
+          count: runLength,
+          source: { id: source.id, path: list.path },
+          as: loopVariable(list.path),
+          itemArgs: new Map([[key, path]]),
+          distinct: path,
+        };
+      }
+    }
+  }
+  return null;
 }
 
 /**
@@ -1016,4 +1217,321 @@ export function inferSchema(value: unknown): Record<string, unknown> {
 
 function deepEqual(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+// ── rule 12: per-item decisions ───────────────────────────────────────
+
+interface DecisionMatch {
+  /** calls consumed from the trace */
+  count: number;
+  source: { id: string; path: string[] };
+  items: unknown[];
+  /** the path in an item that names it, unique across the list ("id") */
+  keyPath: string[];
+  /** item index → the action the agent took on it */
+  acted: Map<number, TraceFile["calls"][number]>;
+  /** tool → the argument that carries the item's key */
+  keyArg: Map<string, string>;
+}
+
+const CHOICE = "choice";
+const MAX_DECISION_EXAMPLES = 20;
+
+/**
+ * rule 12: calls[index…] are actions, one per item of an earlier list, in the
+ * list's order, each naming its item by a key unique in the list (its id), and
+ * the tool or the other values change from item to item (rule 9 found no loop:
+ * the agent decided per item). Two actions at least; anything less certain
+ * stays plain steps.
+ */
+function detectDecisionLoop(
+  calls: TraceFile["calls"],
+  index: number,
+  earlier: Earlier[],
+  isSideEffect: (tool: string) => boolean,
+): DecisionMatch | null {
+  const first = calls[index]!;
+  if (!isSideEffect(first.tool)) return null;
+  for (const source of earlier) {
+    if (source.field !== "result") continue;
+    for (const list of arraysIn(source.result, [], 2)) {
+      for (const [argName, value] of Object.entries(first.args)) {
+        if (typeof value !== "string" && typeof value !== "number") continue;
+        for (const [start, item] of list.items.entries()) {
+          for (const keyPath of pathsOf(item, value)) {
+            if (keyPath.length === 0) continue;
+            const keys = list.items.map((it) =>
+              JSON.stringify(walk(it, keyPath)),
+            );
+            if (new Set(keys).size !== keys.length) continue;
+            const run = extendDecisionRun(
+              calls,
+              index,
+              list.items,
+              keyPath,
+              start,
+              argName,
+              isSideEffect,
+            );
+            if (run.acted.size >= 2) {
+              return {
+                ...run,
+                source: { id: source.id, path: list.path },
+                items: list.items,
+                keyPath,
+              };
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function extendDecisionRun(
+  calls: TraceFile["calls"],
+  index: number,
+  items: unknown[],
+  keyPath: string[],
+  start: number,
+  firstArg: string,
+  isSideEffect: (tool: string) => boolean,
+): Pick<DecisionMatch, "count" | "acted" | "keyArg"> {
+  const acted = new Map([[start, calls[index]!]]);
+  const keyArg = new Map([[calls[index]!.tool, firstArg]]);
+  let last = start;
+  let j = index + 1;
+  for (; j < calls.length && isSideEffect(calls[j]!.tool); j++) {
+    const c = calls[j]!;
+    const names = keyArg.has(c.tool)
+      ? [keyArg.get(c.tool)!]
+      : Object.keys(c.args);
+    let found: { arg: string; at: number } | null = null;
+    for (const arg of names) {
+      for (let m = last + 1; m < items.length && !found; m++) {
+        if (deepEqual(walk(items[m], keyPath), c.args[arg]))
+          found = { arg, at: m };
+      }
+      if (found) break;
+    }
+    if (!found) break;
+    acted.set(found.at, c);
+    keyArg.set(c.tool, found.arg);
+    last = found.at;
+  }
+  return { count: j - index, acted, keyArg };
+}
+
+interface DecisionContext {
+  task: string;
+  request: string[];
+  readOnlyResults: ReadOnlyResult[];
+  steps: WorkflowStep[];
+  earlier: Earlier[];
+  templateValue: (value: unknown) => unknown;
+}
+
+function buildDecisionLoop(
+  match: DecisionMatch,
+  loopId: string,
+  ctx: DecisionContext,
+): { step: WorkflowStep; results: unknown[]; as: string } {
+  const overPath =
+    match.source.path.length > 0 ? `.${match.source.path.join(".")}` : "";
+  const over = `{{steps.${match.source.id}.result${overPath}}}`;
+  const named = loopVariable(match.source.path);
+  const as = named === CHOICE ? "item" : named;
+  const lookup = itemDetails(over, match.items, ctx);
+  const detailsOf = lookup.of;
+  const byTool = new Map<string, Array<[number, TraceFile["calls"][number]]>>();
+  for (const [at, c] of [...match.acted].sort(([a], [b]) => a - b)) {
+    byTool.set(c.tool, [...(byTool.get(c.tool) ?? []), [at, c]]);
+  }
+
+  const body: ToolStep[] = [];
+  const actions: ItemDecision["actions"] = [];
+  // item index → the values its action needed
+  const chosen = new Map<number, Record<string, unknown>>();
+  for (const [tool, done] of byTool) {
+    const keyArg = match.keyArg.get(tool)!;
+    const args: Record<string, unknown> = {
+      [keyArg]: `{{${[as, ...match.keyPath].join(".")}}}`,
+    };
+    const fields: Record<string, "string" | "number"> = {};
+    for (const name of Object.keys(done[0]![1].args)) {
+      if (name === keyArg) continue;
+      const values = done.map(([, c]) => c.args[name]);
+      // the same field of each item: code fills it in
+      const inItem = pathsOf(match.items[done[0]![0]], values[0]).find(
+        (p) =>
+          p.length > 0 &&
+          done.every(([at, c]) =>
+            deepEqual(walk(match.items[at], p), c.args[name]),
+          ),
+      );
+      if (inItem) {
+        args[name] = `{{${[as, ...inItem].join(".")}}}`;
+        continue;
+      }
+      const same = values.every((v) => deepEqual(v, values[0]));
+      const fromData =
+        ctx.templateValue(values[0]) !== values[0] ||
+        done.some(([at]) => pathsOf(detailsOf(at), values[0]).length > 0);
+      const primitive = values.every(
+        (v) => typeof v === "string" || typeof v === "number",
+      );
+      if ((same && !fromData) || !primitive) {
+        args[name] = values[0]; // a constant, until a recording varies it
+        continue;
+      }
+      fields[name] = values.every((v) => typeof v === "number")
+        ? "number"
+        : "string";
+      args[name] = `{{${CHOICE}.${name}}}`;
+      for (const [at, c] of done)
+        chosen.set(at, { ...(chosen.get(at) ?? {}), [name]: c.args[name] });
+    }
+    actions.push({ tool, fields });
+    body.push({
+      id: `${loopId}.${body.length + 1}`,
+      type: "tool",
+      tool,
+      args,
+      sideEffect: true,
+      guard: { schema: inferCommonSchema(done.map(([, c]) => c.result)) },
+      when: { kind: "equals", ref: `${CHOICE}.action`, value: tool },
+    });
+  }
+
+  const decide: ItemDecision = {
+    model: "cheap",
+    prompt: decisionContextPrompt(ctx),
+    key: match.keyPath,
+    ...(lookup.spec ? { details: lookup.spec } : {}),
+    actions,
+    examples: decisionExamples(match, detailsOf, chosen),
+  };
+  return {
+    step: {
+      id: loopId,
+      type: "foreach",
+      over,
+      as,
+      decide,
+      body,
+      maxItems: DEFAULT_MAX_ITEMS,
+    },
+    results: match.items.map((item, at) => {
+      const c = match.acted.get(at);
+      return {
+        [match.keyPath.join(".")]: walk(item, match.keyPath),
+        action: c ? c.tool : "none",
+        ...(chosen.get(at) ?? {}),
+      };
+    }),
+    as,
+  };
+}
+
+/** The item's own looked-up data: an earlier loop over the same list, one result per item. */
+function itemDetails(
+  over: string,
+  items: unknown[],
+  ctx: DecisionContext,
+): { of: (at: number) => unknown; spec?: ItemDecision["details"] } {
+  const lookup = ctx.steps.find(
+    (s): s is Extract<WorkflowStep, { type: "foreach" }> =>
+      s.type === "foreach" && s.over === over && !s.decide,
+  );
+  if (!lookup) return { of: () => undefined };
+  const results = ctx.earlier.find(
+    (e) => e.id === lookup.id && e.field === "results",
+  )?.result;
+  const paired = detailsPerItem(items, results, lookup.distinct);
+  return {
+    of: (at) => paired[at],
+    spec: {
+      step: lookup.id,
+      ...(lookup.distinct ? { distinct: lookup.distinct } : {}),
+    },
+  };
+}
+
+function decisionExamples(
+  match: DecisionMatch,
+  detailsOf: (at: number) => unknown,
+  chosen: Map<number, Record<string, unknown>>,
+): ItemDecision["examples"] {
+  // every action the agent took first, then items it left alone
+  const order = [...match.acted.keys(), ...match.items.keys()].filter(
+    (at, i, all) => all.indexOf(at) === i,
+  );
+  return order
+    .slice(0, MAX_DECISION_EXAMPLES)
+    .sort((a, b) => a - b)
+    .map((at) => {
+      const details = detailsOf(at);
+      const c = match.acted.get(at);
+      return {
+        item: compactValue(match.items[at]),
+        ...(details !== undefined ? { details: compactValue(details) } : {}),
+        choice: c
+          ? { action: c.tool, ...(chosen.get(at) ?? {}) }
+          : { action: "none" },
+      };
+    });
+}
+
+/** Long strings cut to a few hundred characters: examples show the rule, not the documents. */
+function compactValue(value: unknown): unknown {
+  if (typeof value === "string")
+    return value.length > 300 ? `${value.slice(0, 300)}…` : value;
+  if (Array.isArray(value)) return value.slice(0, 20).map(compactValue);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [k, compactValue(v)]),
+    );
+  }
+  return value;
+}
+
+function decisionContextPrompt(ctx: DecisionContext): string {
+  const parts = [
+    `You are replaying the task "${ctx.task}": deciding what to do with each item of a list.`,
+  ];
+  for (const name of ctx.request)
+    parts.push(`the request (inputs.${name}):\n{{inputs.${name}}}`);
+  for (const { id, tool, field } of ctx.readOnlyResults) {
+    const label = field === "results" ? "results (one per item)" : "result";
+    parts.push(`${id} ${tool} ${label}:\n{{steps.${id}.${field}}}`);
+  }
+  return parts.join("\n\n");
+}
+
+/**
+ * Side-effect steps that point at items of one list by position (`leads.0.id`,
+ * `leads.1.id`): a new day's list has other items in other places, so a replay
+ * would act on the wrong ones. Rule 12 turns the usual case into a loop; what
+ * is left is reported, and the runtime never replays it.
+ */
+export function positionalActions(
+  steps: WorkflowStep[],
+): NonNullable<Workflow["positional"]> {
+  const byList = new Map<string, { steps: string[]; at: Set<string> }>();
+  const ref =
+    /\{\{(steps\.[\w-]+\.results?(?:\.[\w-]+)*?)\.(\d+)(?:\.[^}]*)?\}\}/g;
+  for (const step of steps) {
+    if (step.type !== "tool" || !step.sideEffect) continue;
+    for (const m of JSON.stringify(step.args).matchAll(ref)) {
+      const list = m[1]!;
+      const entry = byList.get(list) ?? { steps: [], at: new Set<string>() };
+      if (!entry.steps.includes(step.id)) entry.steps.push(step.id);
+      entry.at.add(m[2]!);
+      byList.set(list, entry);
+    }
+  }
+  return [...byList]
+    .filter(([, e]) => e.at.size >= 2 && e.steps.length >= 2)
+    .map(([list, e]) => ({ list, steps: e.steps }));
 }

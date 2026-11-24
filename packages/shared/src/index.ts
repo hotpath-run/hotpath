@@ -15,3 +15,6 @@ export * from "./steps.js";
 export * from "./items.js";
 export * from "./selection.js";
 export * from "./calc.js";
+export * from "./trim.js";
+export * from "./bands.js";
+export * from "./table.js";

@@ -331,7 +331,10 @@ async function main(): Promise<void> {
       `[${runId}] agent: ${agentMetrics?.llmCalls} calls, ${agentMetrics?.promptTokens} in / ${agentMetrics?.completionTokens} out, ${usd(agentMetrics?.costUsd ?? 0)}, ${s(agentMetrics?.durationMs ?? 0)}`,
     );
     const trace = await latestTraceFile(task);
-    const compiled = await cli(["compile", task, "--trace", trace], "default");
+    const compiled = await cli(
+      ["compile", task, "--trace", trace, "--yes"],
+      "default",
+    );
     if (compiled.code !== 0)
       throw new Error(`compile failed:\n${compiled.output}`);
   }

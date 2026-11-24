@@ -132,14 +132,21 @@ describe("foreach detection", () => {
     expect(wf.steps.map((s) => s.type)).toEqual(["tool", "tool", "tool"]);
   });
 
-  it("keeps plain steps when the calls are out of order", () => {
+  it("loops over every item when a read covered them all, out of order", () => {
     const wf = compile([
       call("get_emails", { date: "2026-10-01" }, { emails }),
       ...[emails[1]!, emails[0]!, emails[2]!].map((e) =>
         call("get_email", { id: e.id }, body(e)),
       ),
     ]);
-    expect(wf.steps.some((s) => s.type === "foreach")).toBe(false);
+    // Plain steps used to stay here, reading emails.1, emails.0, emails.2 by
+    // position: a day with more emails never read the rest (hard-workflow
+    // tests, fulfilment). A read only reads, so its order does not matter.
+    const loop = wf.steps.find((s) => s.type === "foreach");
+    expect(loop?.type === "foreach" && loop.body[0]!.args).toEqual({
+      id: "{{email.id}}",
+    });
+    expect(JSON.stringify(wf.steps)).not.toMatch(/emails\.\d/);
   });
 
   it("keeps plain steps when different tools are mixed in", () => {

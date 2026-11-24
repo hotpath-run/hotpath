@@ -391,6 +391,21 @@ describe("recordingWarnings (incomplete recordings)", () => {
     expect(warnings[0]).toMatch(/never called an action tool/);
     expect(warnings[0]).toContain("send_message");
     expect(warnings[0]).toMatch(/record again/i);
+    // (`hotpath compile` refuses this recording outright: half-done.test.ts; the
+    // warning remains for learn and Studio, which compile through other paths)
+  });
+
+  it("stays quiet when the owner said the task only reads (--read-only)", async () => {
+    const trace = await readTrace(fixture);
+    const readsOnly = {
+      ...trace,
+      calls: trace.calls.filter((c) => c.tool !== "send_message"),
+    };
+    const wf = workflowSchema.parse({
+      ...compileTrace(readsOnly, "x.jsonl"),
+      readOnly: true,
+    });
+    expect(recordingWarnings(readsOnly, wf)).toEqual([]);
   });
 
   it("stays quiet for read-only servers (nothing to act with)", async () => {

@@ -16,8 +16,10 @@ import {
   numbersInText,
   parseOffset,
   rateTable,
+  renderTemplate,
   round2,
   statesTime,
+  trimData,
   type Calculation,
   type Conversion,
   type RateSource,
@@ -29,6 +31,9 @@ import {
 
 import type { RecordedResult } from "./compiler.js";
 import { CALCULATED } from "./derived.js";
+import { explainAcross, learnGroupCalculations } from "./group-calculations.js";
+import { markDecisionBands } from "./decision-bands.js";
+import { learnTrim } from "./trim.js";
 
 type Item = Record<string, unknown>;
 const isItem = (v: unknown): v is Item =>
@@ -123,6 +128,10 @@ export function learnCalculations(
 
   const lists = new Map<string, Item[]>();
   objectLists(ctx.steps, "steps", lists);
+  // one item's list inside a loop's results (steps.s2.results.0.orders) is a
+  // different region on another day: never a list to pin a formula to
+  for (const ref of [...lists.keys()])
+    if (/\.results\.\d+(?:\.|$)/.test(ref)) lists.delete(ref);
 
   // per list: what the text selected from it, and the rule, when one fits
   interface Scope {
@@ -156,9 +165,17 @@ export function learnCalculations(
       break;
     }
   }
-  for (const line of example.split("\n")) {
+  // figures per group of a loop first: their lines name a group the plain
+  // formulas know nothing about
+  const plainLists = [...lists.keys()];
+  const groups = learnGroupCalculations(example, ctx, plainLists);
+  out.push(...groups.calcs);
+  for (const [i, line] of example.split("\n").entries()) {
     for (const figure of calculatedIn(line, known)) {
-      const calc = explain(line, figure, scopes, ctx);
+      if (groups.covered.has(`${i}:${round2(figure)}`)) continue;
+      const calc =
+        explain(line, figure, scopes, ctx) ??
+        explainAcross(line, figure, ctx, plainLists);
       if (calc) out.push(calc);
     }
   }
@@ -350,7 +367,7 @@ export function markCalculations(
   inputs: Record<string, unknown>,
 ): Workflow {
   // HOTPATH_CALCULATIONS=0: the model calculates, as before (to measure the difference)
-  if (process.env.HOTPATH_CALCULATIONS === "0") return workflow;
+  const calculate = process.env.HOTPATH_CALCULATIONS !== "0";
   const ctx: TemplateContext = { inputs: inputs as never, steps: {} };
   for (const r of recorded) {
     ctx.steps[r.id] = (
@@ -360,10 +377,27 @@ export function markCalculations(
   let changed = false;
   const steps = workflow.steps.map((s) => {
     if (s.type !== "llm") return s;
-    const calculations = learnCalculations(s.example, ctx);
-    if (calculations.length === 0) return s;
+    const calculations = calculate ? learnCalculations(s.example, ctx) : [];
+    const trim =
+      calculations.length > 0
+        ? learnTrim({
+            prompt: s.prompt,
+            example: s.example,
+            ctx,
+            calcs: calculations,
+            grounding: s.guard.grounding,
+          })
+        : [];
+    const sent = trim.length > 0 ? (trimData(ctx, trim) ?? ctx) : ctx;
+    const inputChars = String(renderTemplate(s.prompt, sent)).length;
     changed = true;
-    return { ...s, calculations };
+    return {
+      ...s,
+      ...(calculations.length > 0 ? { calculations } : {}),
+      ...(trim.length > 0 ? { trim } : {}),
+      inputChars,
+    };
   });
-  return changed ? { ...workflow, steps } : workflow;
+  // the bands read the thresholds the agent wrote in the reports
+  return markDecisionBands(changed ? { ...workflow, steps } : workflow);
 }
