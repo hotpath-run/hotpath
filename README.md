@@ -4,13 +4,15 @@
 
 Hotpath watches your agent run, finds the paths it repeats, and compiles them into a plain workflow you can read: the tool calls become code, and a model is called only for the text that needs judgment. When a tool changes shape, the run is handed back to your agent, which records the new path.
 
+**New here? Read [Hotpath, explained](docs/HOTPATH-EXPLAINED.md)**: what it does and what it saves in plain English, how it works for developers, and a prompt that asks your coding agent whether Hotpath fits your project.
+
 ![demo](docs/demo.gif)
 
 - **Cheaper.** A replay on Claude Haiku costs about 30–65× less than the Sonnet agent it replaced (two tasks, 10 runs each).
 - **Faster.** Up to 8× faster on repeated data and about 2.5× faster on new data (two tasks, Claude, 10 runs each). The model call is most of the remaining time.
 - **Checked.** Every report is checked against the data before it is sent. Sums, counts and currency and time-zone conversions are recomputed by code, not by the model. The replay noticed 8 of 8 kinds of data change we tested and handed the run to the agent instead of guessing.
 - **Safe to retry.** A run that crashes between two actions does not repeat the first one when run again.
-- **Local first.** It works on a free local model (Ollama). Your data, prompts and tool arguments stay on your machine; the only network calls are to the model provider you choose and, for your account, the run summaries described in [Why an account?](#why-an-account).
+- **Local first.** It works on a free local model (Ollama). Your data, prompts and tool arguments stay on your machine; the only network calls are to the model provider you choose and, for your account, the run summaries described in [Optional: the dashboard](#optional-the-dashboard), and only if you sign in.
 
 These numbers come from synthetic benchmark tasks; the runs, models and failures are published in [`docs/BENCHMARK.md`](docs/BENCHMARK.md). On a small free 1.7B model doing everything, 54% of 99 suite runs passed (87% where the recording was good): a replay is only as good as its recording, so record with a capable agent.
 
