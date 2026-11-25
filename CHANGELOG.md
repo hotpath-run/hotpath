@@ -2,6 +2,12 @@
 
 All notable changes. Versions follow [semantic versioning](https://semver.org); before 1.0 a minor version may change behaviour, and the change is listed here.
 
+## 0.4.1
+
+No account needed.
+
+- The account is optional: every command runs without signing in. `hotpath login` adds the free dashboard; nothing is synced unless you sign in.
+
 ## 0.4.0
 
 Replays you can trust: a workflow now says when it is not sure instead of acting wrong, and works out more of its figures and decisions with code. Measured on a new benchmark of 11 real-world workflows, each recorded once and replayed on 4 new days (a normal day, another, a big day, an empty day): with a free model as both agent and replay model, replays went from 21/44 right with 16 silently wrong to **43/44 right with none silently wrong**; with Claude (Sonnet records, Haiku replays) 24/24 on the 6 workflows tried.

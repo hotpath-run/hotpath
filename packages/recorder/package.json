@@ -1,6 +1,6 @@
 {
   "name": "@hotpathrun/recorder",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "MCP stdio proxy that records an agent's tool calls to a JSONL trace",
   "license": "Apache-2.0",
   "repository": {

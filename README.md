@@ -19,14 +19,13 @@ These numbers come from synthetic benchmark tasks; the runs, models and failures
 You need Node 22 or newer and one model: [Ollama](https://ollama.com) (free, local) or any OpenAI-compatible API key.
 
 ```bash
-npx @hotpathrun/cli login          # step 1: sign in to your free account (opens your browser)
 ollama pull qwen3:1.7b          # skip this if you use an API key
 mkdir hotpath-try && cd hotpath-try
 npx @hotpathrun/cli init           # pick Ollama or a provider; writes .env here
 npx @hotpathrun/cli demo           # the one-command trial, explained below
 ```
 
-`login` shows a code and opens hotpath.run so you can approve it; do it once per computer.
+No account needed: everything runs on your machine.
 
 `init --provider ollama --yes` asks nothing and sets up Ollama. `hotpath demo` then does three things, and tells you which one it is on:
 
@@ -47,18 +46,18 @@ The demo needs a model that can call tools. `qwen3:1.7b` is enough for it; if a 
 
 To keep the command around: `npm i -g @hotpathrun/cli`, then `hotpath demo` and `hotpath --help`.
 
-## Why an account?
+## Optional: the dashboard
 
-The CLI needs a free [hotpath.run](https://hotpath.run) account, and it is still open source (Apache-2.0). The account puts your workflows and runs on a dashboard: hit rate, time and cost saved, and what fell back to the agent.
+The CLI runs without an account. Sign in with `npx @hotpathrun/cli login` (it shows a code and opens hotpath.run so you can approve it, once per computer) and your workflows and runs show on a free dashboard: hit rate, time and cost saved, and what fell back to the agent.
 
 - **Only run summaries are synced, never your data.** What is sent: a workflow's name, its step counts and a graph of tool names and step kinds, and per run the time, cost, number of model calls and whether it fell back. Never tool arguments or results, prompts, model output, inputs, file paths or `.env` values.
-- **Turn sync off** with `HOTPATH_NO_SYNC=1`. You still need to be signed in.
+- **Nothing is synced unless you sign in.** Signed in, turn sync off with `HOTPATH_NO_SYNC=1`.
 - **In CI,** create a token under Settings → CLI sessions on the dashboard and set `HOTPATH_TOKEN`; no login step is needed.
 - `hotpath whoami` shows who you are signed in as, `hotpath logout` signs this computer out and revokes its session. The sign-in is kept in `credentials.json` in your settings folder (`%APPDATA%\hotpath` on Windows, `~/.config/hotpath` elsewhere), readable only by you; it is checked online at most once a day, and the CLI keeps working offline for up to 7 days.
 
 ## Try it in Claude Code
 
-The same demo, with Claude Code as the agent (sign in first with `npx @hotpathrun/cli login`; the recorder Claude Code starts uses that sign-in). The tools are fake (emails, calendar and weather from bundled files), so nothing real is read or sent. In the `hotpath-try` folder from the quickstart:
+The same demo, with Claude Code as the agent. The tools are fake (emails, calendar and weather from bundled files), so nothing real is read or sent. In the `hotpath-try` folder from the quickstart:
 
 ```bash
 claude mcp add hotpath-demo -- npx -y @hotpathrun/cli record --task morning-brief -- npx -y @hotpathrun/cli demo-tools

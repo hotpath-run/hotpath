@@ -42,6 +42,8 @@ export interface GateDeps {
   pidAlive: (pid: number) => boolean;
   /** how long the online check may take before it counts as "offline" */
   timeoutMs?: number;
+  /** whether a command needs an account; REQUIRE_LOGIN unless set */
+  requireLogin?: boolean;
 }
 
 export type GateResult = { ok: true } | { ok: false; message: string };
@@ -66,7 +68,7 @@ export async function currentToken(
 }
 
 export async function checkLogin(deps: GateDeps): Promise<GateResult> {
-  if (!REQUIRE_LOGIN) return { ok: true };
+  if (!(deps.requireLogin ?? REQUIRE_LOGIN)) return { ok: true };
   const marker = Number(deps.env[GATE_MARKER]);
   if (Number.isInteger(marker) && marker > 0 && deps.pidAlive(marker)) {
     return { ok: true };

@@ -20,6 +20,8 @@ export interface AccountDeps {
   err: (line: string) => void;
   /** an old sign-in folder to move from (~/.hotpath); unset: nothing to move */
   legacyDir?: string;
+  /** whether commands need an account; REQUIRE_LOGIN unless set */
+  requireLogin?: boolean;
 }
 
 export function defaultAccountDeps(version: string): AccountDeps {
@@ -51,8 +53,9 @@ function topLevelName(command: Command): string {
 }
 
 /**
- * The login requirement: every command except login, logout, whoami and the
- * internal ones (--help and --version never reach an action) needs a token.
+ * The login requirement, when it is on: every command except login, logout,
+ * whoami and the internal ones (--help and --version never reach an action)
+ * needs a token. Off by default (REQUIRE_LOGIN).
  */
 export function addLoginGate(program: Command, deps: AccountDeps): void {
   program.hook("preAction", async (_program, action) => {
@@ -64,6 +67,7 @@ export function addLoginGate(program: Command, deps: AccountDeps): void {
       fetch: deps.fetch,
       now: deps.now,
       pidAlive,
+      requireLogin: deps.requireLogin,
     });
     if (!result.ok) {
       deps.err(result.message);

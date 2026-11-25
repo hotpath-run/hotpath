@@ -77,6 +77,7 @@ const gateDeps = (
   fetch: f,
   now: () => 1_000_000_000_000,
   pidAlive: () => false,
+  requireLogin: true,
   ...over,
 });
 
@@ -316,8 +317,18 @@ describe("hotpath logout and whoami", () => {
 });
 
 describe("the login requirement", () => {
-  it("is one switch, on", () => {
-    expect(REQUIRE_LOGIN).toBe(true);
+  it("is one switch, off: the account is optional", () => {
+    expect(REQUIRE_LOGIN).toBe(false);
+  });
+
+  it("lets every command run without a token by default", async () => {
+    const api = fakeFetch(() => "network");
+    const r = await checkLogin({
+      ...gateDeps(api.fetch),
+      requireLogin: undefined,
+    });
+    expect(r).toEqual({ ok: true });
+    expect(api.calls).toEqual([]);
   });
 
   it("asks for an account when there is no token, with the exact message", async () => {
@@ -451,6 +462,7 @@ describe("the gate on commands", () => {
     args: string[],
     env: NodeJS.ProcessEnv,
     f?: typeof fetch,
+    requireLogin: boolean | undefined = true,
   ) {
     const errs: string[] = [];
     const outs: string[] = [];
@@ -460,6 +472,7 @@ describe("the gate on commands", () => {
         env,
         dir,
         fetch: f ?? fakeFetch(() => ({ body: {} })).fetch,
+        requireLogin,
         err: (l) => errs.push(l),
         out: (l) => outs.push(l),
         exit: (c) => {
@@ -487,6 +500,17 @@ describe("the gate on commands", () => {
       const r = await runCli(args, {});
       expect(r.errs, args.join(" ")).toEqual([LOGIN_REQUIRED_MESSAGE]);
       expect(r.exits).toEqual([1]);
+    }
+  });
+
+  it("runs any command without a token when the requirement is off", async () => {
+    for (const args of [
+      ["show", "x"],
+      ["doctor", "--offline"],
+    ]) {
+      const r = await runCli(args, {}, undefined, false);
+      expect(r.errs, args.join(" ")).not.toContain(LOGIN_REQUIRED_MESSAGE);
+      expect(r.exits, args.join(" ")).not.toContain(1);
     }
   });
 
@@ -553,10 +577,10 @@ describe("the real command line", () => {
     return env;
   };
 
-  it("refuses a command without an account, but not --version or --help", async () => {
-    const blocked = await cli(["show", "nothing"], bare());
-    expect(blocked.code).toBe(1);
-    expect(blocked.out).toContain(LOGIN_REQUIRED_MESSAGE);
+  it("runs a command without an account, and --version and --help too", async () => {
+    const open = await cli(["show", "nothing"], bare());
+    expect(open.out).not.toContain(LOGIN_REQUIRED_MESSAGE);
+    expect(open.out).not.toContain("hotpath login");
     expect((await cli(["--version"], bare())).code).toBe(0);
     expect((await cli(["--help"], bare())).code).toBe(0);
   }, 60_000);

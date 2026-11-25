@@ -1,6 +1,8 @@
-// The one switch for the login requirement: set to false and every command
-// runs without an account (login, logout, whoami and sync still work).
-export const REQUIRE_LOGIN = true;
+// The account is optional: every command runs without one, and signing in only
+// adds the dashboard (run summaries sync once logged in). An open-source CLI that
+// refuses to run locally without a sign-up loses most people before the demo.
+// Set to true to bring the requirement back.
+export const REQUIRE_LOGIN = false;
 
 export const API_BASE = "https://amjgasdhzhndqkvvvads.supabase.co";
 
