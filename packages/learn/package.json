@@ -49,7 +49,7 @@
     "@hotpathrun/shared": "workspace:*"
   },
   "devDependencies": {
-    "@types/node": "^22.10.0",
+    "@types/node": "^26.6.6",
     "vitest": "^2.1.8"
   }
 }
